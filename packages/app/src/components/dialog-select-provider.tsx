@@ -1,4 +1,4 @@
-import { Component, Show } from "solid-js"
+import { Component, Show, onMount } from "solid-js"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { popularProviders, useProviders } from "@/hooks/use-providers"
 import { Dialog } from "@opencode-ai/ui/dialog"
@@ -8,6 +8,7 @@ import { ProviderIcon } from "@opencode-ai/ui/provider-icon"
 import { DialogConnectProvider } from "./dialog-connect-provider"
 import { useLanguage } from "@/context/language"
 import { DialogCustomProvider } from "./dialog-custom-provider"
+import { HIDE_PROVIDER_UI } from "@/branding"
 
 const CUSTOM_ID = "_custom"
 
@@ -15,6 +16,19 @@ export const DialogSelectProvider: Component = () => {
   const dialog = useDialog()
   const providers = useProviders()
   const language = useLanguage()
+
+  // PunkcodeAI 兜底闸：即使有任何路径绕过 UI 入口（深链、其他 dialog 反向打开、
+  // 命令行参数等）触发 DialogSelectProvider mount，也立即关闭弹窗，确保企业内部
+  // 用户不会接触到任何 provider 配置界面。
+  onMount(() => {
+    if (HIDE_PROVIDER_UI) {
+      dialog.close()
+    }
+  })
+
+  if (HIDE_PROVIDER_UI) {
+    return null
+  }
 
   const popularGroup = () => language.t("dialog.provider.group.popular")
   const otherGroup = () => language.t("dialog.provider.group.other")
