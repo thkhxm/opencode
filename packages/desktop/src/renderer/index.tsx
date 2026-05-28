@@ -231,8 +231,9 @@ const createPlatform = (): Platform => {
 
       const notification = new Notification(title, {
         body: description ?? "",
-        // TODO M9: 替换为 https://punkcodeai.myverse.site/favicon-96x96.png（需用户提供 logo 文件并上传到主站）
-        icon: "https://opencode.ai/favicon-96x96-v3.png",
+        // 等 M9 用户提供 logo 后实际上传到 punkcodeai.myverse.site；
+        // 现在指向尚未上线的 URL 时浏览器渲染默认通知图标，比泄漏 opencode.ai 品牌好。
+        icon: "https://punkcodeai.myverse.site/favicon-96x96.png",
       })
       notification.onclick = () => {
         void window.api.showWindow()
