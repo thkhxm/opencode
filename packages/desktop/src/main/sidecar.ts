@@ -246,16 +246,15 @@ function parseSetCredentialsCommand(value: unknown): SetCredentialsCommand | und
  */
 const PUNKCODE_PROVIDER_ID = "punkcodeai"
 
-let currentPunkcodeCredentials: SetCredentialsCommand["credentials"] | null = null
-
 /**
  * 把 PunkcodeAI 凭据塞进 process.env 并 dispose 所有 instance state cache,
  * 让下一次 provider.list / config.get 重新初始化。
+ *
+ * 注：凭据本身**不在本进程内额外缓存**——sidecar 唯一的真理源是 `process.env.OPENCODE_AUTH_CONTENT` /
+ * `OPENCODE_CONFIG_CONTENT`，重启进程自然丢失，符合"sk- 仅内存"安全规范。
  */
 async function applyPunkcodeCredentials(credentials: SetCredentialsCommand["credentials"]): Promise<void> {
   try {
-    currentPunkcodeCredentials = credentials
-
     // 1) OPENCODE_AUTH_CONTENT：注入 sk-key。该 env 一旦设置就会替换整个 auth.all() 返回值，
     //    所以桌面端只支持 PunkcodeAI 一个 provider 是符合设计的（M5 已隐藏 provider UI）。
     process.env.OPENCODE_AUTH_CONTENT = JSON.stringify({
@@ -313,7 +312,6 @@ async function applyPunkcodeCredentials(credentials: SetCredentialsCommand["cred
 
 async function clearPunkcodeCredentials(): Promise<void> {
   try {
-    currentPunkcodeCredentials = null
     delete process.env.OPENCODE_AUTH_CONTENT
     delete process.env.OPENCODE_CONFIG_CONTENT
     await reloadProviderState()
@@ -332,7 +330,6 @@ async function clearPunkcodeCredentials(): Promise<void> {
  * 因为还没有任何 instance load 过；virtual:opencode-server 模块此时已 import。
  */
 async function reloadProviderState(): Promise<void> {
-  void currentPunkcodeCredentials // 仅作内存持有；reload 后下游读 env 拿凭据。
   try {
     const { InstanceRuntime } = await import("virtual:opencode-server")
     await InstanceRuntime.disposeAllInstances()

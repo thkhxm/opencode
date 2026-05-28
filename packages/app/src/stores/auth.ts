@@ -40,6 +40,42 @@ interface CredentialsUser {
   balance_usd: number
 }
 
+/**
+ * `/api/v1/cli/me` 返回的实时用户信息（M7）。
+ *
+ * 含余额 + 今日/本月用量。30s 轮询 + chat stream 结束钩子调用此接口刷新右上角 balance widget。
+ */
+interface CliMeResponse {
+  id: number
+  email: string
+  nickname: string
+  balance_usd: number
+  used_today_usd: number
+  used_month_usd: number
+}
+
+/**
+ * `/api/v1/cli/balance-requests` 申请条目（M7）。
+ *
+ * status 三态：pending / approved / rejected。
+ * rejected 时 admin 可填 `reject_reason` 给用户看。
+ */
+export type BalanceRequestStatus = "pending" | "approved" | "rejected"
+
+export interface BalanceRequest {
+  id: number
+  user_id?: number
+  amount_usd: number
+  note?: string
+  status: BalanceRequestStatus
+  created_at?: string
+  updated_at?: string
+  approved_at?: string
+  rejected_at?: string
+  reject_reason?: string
+  admin_note?: string
+}
+
 interface CredentialsAuthResponse {
   access_token: string
   refresh_token: string
@@ -85,6 +121,10 @@ export type AuthState = {
     email: string
     nickname: string
     balanceUsd: number
+    /** 今日已用（USD）。M7 新增，从 `/cli/me` 实时拉取；未拉到时为 0。 */
+    usedTodayUsd: number
+    /** 本月已用（USD）。M7 新增，从 `/cli/me` 实时拉取；未拉到时为 0。 */
+    usedMonthUsd: number
   }
   apiKey: string
   llmBaseUrl: string
@@ -232,6 +272,16 @@ async function callAuthorizedGet<T>(url: string, accessToken: string, label: str
 const [state, setState] = createSignal<AuthState | null>(null)
 const isLoggedIn = createMemo(() => state() !== null)
 
+/**
+ * bootstrap 是否仍在进行中。
+ *
+ * 初始值 true：模块加载完到 `ensureBootstrap()` 第一次跑完之前，
+ * UI 应当渲染 splash 而不是把用户直接踢去 /login（M5 P2 修复，详见 AuthGate）。
+ *
+ * 当 localStorage 里没有 refresh_token 或 bootstrap 出错时也会被置为 false。
+ */
+const [bootstrapping, setBootstrapping] = createSignal(true)
+
 let refreshTimer: ReturnType<typeof setTimeout> | null = null
 let bootstrapped = false
 
@@ -288,6 +338,9 @@ const handleAuthSuccess = async (server: string, auth: CredentialsAuthResponse) 
       email: auth.user.email,
       nickname: auth.user.nickname,
       balanceUsd: auth.user.balance_usd,
+      // M7: signIn / signUp 接口本身不返用量；先置 0，后续 widget 30s 轮询 `/cli/me` 补上。
+      usedTodayUsd: 0,
+      usedMonthUsd: 0,
     },
     ...creds,
   }
@@ -390,6 +443,78 @@ async function callLlm(server: string, accessToken: string): Promise<CliLlmRespo
   return callAuthorizedGet<CliLlmResponse>(url, accessToken, "Credentials.llm")
 }
 
+// ============================================================
+// M7: /cli/me + 充值申请
+// ============================================================
+
+async function callMe(server: string, accessToken: string): Promise<CliMeResponse> {
+  const url = `${normalizeServer(server)}/api/v1/cli/me`
+  return callAuthorizedGet<CliMeResponse>(url, accessToken, "Credentials.me")
+}
+
+/**
+ * 用 Bearer token + envelope 协议调一次鉴权 POST。复用 callApi 的 envelope 错误约定。
+ */
+async function callAuthorizedPost<T>(
+  url: string,
+  accessToken: string,
+  body: unknown,
+  label: string,
+): Promise<T> {
+  let response: Response
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify(body),
+    })
+  } catch (cause) {
+    throw new AccountError(`${label}: HTTP request failed`, { cause })
+  }
+
+  let envelope: CredentialsEnvelope<unknown>
+  try {
+    envelope = (await response.json()) as CredentialsEnvelope<unknown>
+  } catch (cause) {
+    throw new AccountError(`${label}: failed to decode envelope`, { cause })
+  }
+
+  if (typeof envelope.code !== "number" || typeof envelope.message !== "string") {
+    throw new AccountError(`${label}: malformed envelope`)
+  }
+  if (envelope.code !== 0) {
+    throw new CredentialsError(envelope.code, envelope.message)
+  }
+  return envelope.data as T
+}
+
+async function callCreateBalanceRequest(
+  server: string,
+  accessToken: string,
+  input: { amount_usd: number; note?: string },
+): Promise<BalanceRequest> {
+  const url = `${normalizeServer(server)}/api/v1/cli/balance-requests`
+  return callAuthorizedPost<BalanceRequest>(url, accessToken, input, "Credentials.balanceRequests.create")
+}
+
+async function callListBalanceRequests(
+  server: string,
+  accessToken: string,
+  limit = 20,
+): Promise<BalanceRequest[]> {
+  const url = `${normalizeServer(server)}/api/v1/cli/balance-requests?limit=${encodeURIComponent(String(limit))}`
+  const data = await callAuthorizedGet<{ items?: BalanceRequest[] }>(
+    url,
+    accessToken,
+    "Credentials.balanceRequests.list",
+  )
+  return Array.isArray(data.items) ? data.items : []
+}
+
 /**
  * Renderer → main 进程 IPC：推 sk- 凭据给 sidecar。
  *
@@ -409,7 +534,14 @@ async function pushCredentialsToSidecar(state: AuthState): Promise<void> {
         }) => Promise<void>
       }
     | undefined
-  if (!api?.setPunkcodeCredentials) return
+  if (!api?.setPunkcodeCredentials) {
+    // M6 P2-A：dev 浏览器调试模式下 window.api 不存在；静默 return 之外打一条 warn，
+    // 让开发者知道 sidecar 凭据没真的推下去（避免 "为什么模型列表是空" 这种排查浪费时间）。
+    console.warn(
+      "PunkcodeAI: window.api unavailable, sidecar credentials skipped (dev browser mode?)",
+    )
+    return
+  }
   try {
     await api.setPunkcodeCredentials({
       apiKey: state.apiKey,
@@ -502,6 +634,8 @@ export const ensureBootstrap = (): Promise<void> => {
   bootstrapPromise = bootstrapInner().finally(() => {
     bootstrapped = true
     bootstrapPromise = null
+    // M5 P2-C：bootstrap 一旦跑完（无论结果），AuthGate 不再 splash，按 isLoggedIn 决定。
+    setBootstrapping(false)
   })
   return bootstrapPromise
 }
@@ -520,8 +654,6 @@ async function bootstrapInner(): Promise<void> {
   try {
     const pair = await callRefresh(persisted.server, persisted.refreshToken)
     const expiry = Date.now() + pair.expires_in * 1000
-    // bootstrap 阶段拿不到 user 详情（refresh 接口不返 user），
-    // 用 accountID 反推 email；nickname / balance 等显示字段先留空，等 M7 接 `/cli/me` 填实。
     const url = normalizeServer(persisted.server)
     const emailFromID = persisted.accountID.startsWith(`${url}:`)
       ? persisted.accountID.slice(url.length + 1)
@@ -536,6 +668,15 @@ async function bootstrapInner(): Promise<void> {
       creds = { apiKey: "", llmBaseUrl: "", anthropicBaseUrl: "", geminiBaseUrl: "", models: [] }
     }
 
+    // M7: refresh 成功后立即拉一次 /cli/me 补全 user.email/nickname/balance/usedToday/usedMonth。
+    // 失败兜底用 accountID 反推的 email + 占位 0（避免 widget 显示空白）；下一次 30s 轮询自然回填。
+    let me: CliMeResponse | null = null
+    try {
+      me = await callMe(url, pair.access_token)
+    } catch {
+      me = null
+    }
+
     const next: AuthState = {
       server: url,
       accountID: persisted.accountID,
@@ -543,10 +684,12 @@ async function bootstrapInner(): Promise<void> {
       refreshToken: pair.refresh_token,
       expiry,
       user: {
-        id: 0,
-        email: emailFromID,
-        nickname: emailFromID,
-        balanceUsd: 0,
+        id: me?.id ?? 0,
+        email: me?.email ?? emailFromID,
+        nickname: me?.nickname ?? emailFromID,
+        balanceUsd: me?.balance_usd ?? 0,
+        usedTodayUsd: me?.used_today_usd ?? 0,
+        usedMonthUsd: me?.used_month_usd ?? 0,
       },
       ...creds,
     }
@@ -556,6 +699,41 @@ async function bootstrapInner(): Promise<void> {
   } catch {
     // refresh_token 过期 / 网络故障 → 清掉持久化让用户重新登录。
     writePersisted(null)
+  }
+}
+
+/**
+ * M7：拉一次 /cli/me 把 user.balance/usedToday/usedMonth 等字段刷新到 store。
+ *
+ * 用途：右上角 balance widget 的 30s 轮询、点刷新、chat stream 完成钩子。
+ *
+ * 失败不踢用户下线（网络抖动 / 5xx）；返回 false 让 UI 层决定是否提示。
+ * 401 / token 失效会被 callAuthorizedGet 抛成 CredentialsError → 调用方按业务错处理；
+ *   注意此时不立刻退出登录（refresh 还有机会救回），让 backgroundRefresh 走它的退出逻辑。
+ */
+async function refreshMeCore(): Promise<boolean> {
+  const current = state()
+  if (!current) return false
+  try {
+    const me = await callMe(current.server, current.accessToken)
+    const latest = state()
+    // 避免回填竞态：刚 signOut 之后 inflight 请求 settle 不能再写回 state。
+    if (!latest || latest.accountID !== current.accountID) return false
+    setState({
+      ...latest,
+      user: {
+        ...latest.user,
+        id: me.id || latest.user.id,
+        email: me.email || latest.user.email,
+        nickname: me.nickname || latest.user.nickname,
+        balanceUsd: me.balance_usd,
+        usedTodayUsd: me.used_today_usd,
+        usedMonthUsd: me.used_month_usd,
+      },
+    })
+    return true
+  } catch {
+    return false
   }
 }
 
@@ -583,6 +761,11 @@ export const useAuth = () => ({
   state,
   /** 是否已登录（reactive） */
   isLoggedIn,
+  /**
+   * bootstrap 是否仍在跑（reactive）。
+   * AuthGate 在 `bootstrapping() === true` 时渲染 splash，避免登录态闪烁后才跳 /login（M5 P2）。
+   */
+  bootstrapping,
 
   /**
    * 邮箱 + 密码登录。
@@ -613,6 +796,39 @@ export const useAuth = () => ({
   /** 主动触发一次 refresh（调试 / "余额刷新"按钮 等场景用；UI 层一般不用） */
   async refresh(): Promise<void> {
     await backgroundRefresh()
+  },
+
+  /**
+   * M7：拉一次 `/cli/me` 把余额 / 今日用量 / 本月用量 / 昵称等同步到 store。
+   *
+   * @returns true=成功；false=未登录 / 网络失败 / envelope 错。
+   * 失败不抛错，不踢用户下线；UI 层根据返回值决定是否回滚 spinner、显示提示等。
+   */
+  async refreshMe(): Promise<boolean> {
+    return refreshMeCore()
+  },
+
+  /**
+   * M7：提交一条充值申请。
+   *
+   * @throws CredentialsError 业务错（如 code=409 "too many pending balance requests"）
+   * @throws AccountError 网络/解码错
+   */
+  async requestTopup(input: { amount_usd: number; note?: string }): Promise<BalanceRequest> {
+    const current = state()
+    if (!current) throw new AccountError("Credentials.balanceRequests.create: not signed in")
+    return callCreateBalanceRequest(current.server, current.accessToken, input)
+  },
+
+  /**
+   * M7：列我的最近 N 条充值申请。
+   *
+   * @throws CredentialsError / AccountError 同上。
+   */
+  async listBalanceRequests(limit = 20): Promise<BalanceRequest[]> {
+    const current = state()
+    if (!current) throw new AccountError("Credentials.balanceRequests.list: not signed in")
+    return callListBalanceRequests(current.server, current.accessToken, limit)
   },
 })
 

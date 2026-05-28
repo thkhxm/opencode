@@ -89,6 +89,7 @@ import {
 import { ProjectDragOverlay, SortableProject, type ProjectSidebarContext } from "./layout/sidebar-project"
 import { HIDE_PROVIDER_UI } from "@/branding"
 import { SidebarContent } from "./layout/sidebar-shell"
+import { BalanceWidget } from "@/components/balance-widget"
 
 export default function Layout(props: ParentProps) {
   const [store, setStore, , ready] = persisted(
@@ -2378,6 +2379,8 @@ export default function Layout(props: ParentProps) {
         <div class="relative bg-v2-background-bg-deep flex-1 min-h-0 min-w-0 flex flex-col select-none [&_input]:select-text [&_textarea]:select-text [&_[contenteditable]]:select-text">
           {autoselecting() ?? ""}
           <Titlebar update={titlebarUpdate} />
+          {/* PunkcodeAI（M7）：右上角余额 widget，Portal 挂到 titlebar 内的 #opencode-titlebar-right。 */}
+          <BalanceWidget />
           <main
             class="flex-1 min-h-0 min-w-0 overflow-x-hidden flex flex-col items-start contain-strict bg-v2-background-bg-base"
             classList={{
@@ -2396,6 +2399,8 @@ export default function Layout(props: ParentProps) {
       <div class="relative bg-background-base flex-1 min-h-0 min-w-0 flex flex-col select-none [&_input]:select-text [&_textarea]:select-text [&_[contenteditable]]:select-text">
         {autoselecting() ?? ""}
         <Titlebar update={titlebarUpdate} />
+        {/* PunkcodeAI（M7）：右上角余额 widget，Portal 挂到 titlebar 内的 #opencode-titlebar-right。 */}
+        <BalanceWidget />
         <Show when={updateVersion() !== undefined}>
           <UpdateAvailableToast version={updateVersion() ?? ""} install={installUpdate} language={language} />
         </Show>

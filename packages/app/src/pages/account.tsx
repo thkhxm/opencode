@@ -6,17 +6,20 @@
  * 显示：
  *   - 邮箱
  *   - 昵称
- *   - 余额（M5 阶段直接读 store.user.balanceUsd——bootstrap 路径下是 0；
- *           M7 接 `/cli/me` widget 后补真值）
+ *   - 余额（M7：由右上角 widget 30s 轮询 `/cli/me` 持续刷新，这里实时显示）
+ *   - 今日 / 本月用量（M7）
+ *
  * 不显示：access_token / refresh_token / 任何 sk- key（按规范要求）。
  *
  * 操作：
+ *   - 申请充值：弹出 TopupDialog（M7）
  *   - 退出登录：清 store + localStorage + 跳 /login
  */
 
 import { Component } from "solid-js"
 import { useNavigate } from "@solidjs/router"
 import { Button } from "@opencode-ai/ui/button"
+import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { useLanguage } from "@/context/language"
 import { useAuth } from "@/stores/auth"
 
@@ -24,10 +27,17 @@ const Account: Component = () => {
   const auth = useAuth()
   const navigate = useNavigate()
   const language = useLanguage()
+  const dialog = useDialog()
 
   async function onLogout() {
     await auth.signOut()
     navigate("/login", { replace: true })
+  }
+
+  function openTopup() {
+    void import("@/components/topup-dialog").then((m) => {
+      dialog.show(() => <m.TopupDialog />)
+    })
   }
 
   const session = () => auth.state()
@@ -48,10 +58,17 @@ const Account: Component = () => {
             label={language.t("account.balance")}
             value={`$${(session()?.user.balanceUsd ?? 0).toFixed(2)}`}
           />
+          <Row
+            label={language.t("balance.todayUsed")}
+            value={`$${(session()?.user.usedTodayUsd ?? 0).toFixed(2)}`}
+          />
         </dl>
         <div class="flex gap-3">
           <Button variant="ghost" onClick={() => navigate("/", { replace: true })}>
             {language.t("account.back")}
+          </Button>
+          <Button variant="ghost" onClick={openTopup}>
+            {language.t("topup.openButton")}
           </Button>
           <Button variant="primary" onClick={onLogout}>
             {language.t("account.logout")}
