@@ -17,6 +17,22 @@ export function setupAutoUpdater() {
   autoUpdater.allowDowngrade = true
   autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = false
+
+  // M8: 运行时 feed URL 覆盖
+  //
+  // - electron-builder.config.ts 已在 publish 字段写入默认 generic feed URL
+  //   （编译进 app-update.yml），autoUpdater 启动时自动加载
+  // - 如果用户/运维想临时切换 update server（如 staging 自动化测试），
+  //   设置 PUNKCODE_UPDATE_FEED_URL 即可在不重新构建的情况下覆盖
+  const runtimeFeedUrl = process.env.PUNKCODE_UPDATE_FEED_URL
+  if (runtimeFeedUrl) {
+    autoUpdater.setFeedURL({
+      provider: "generic",
+      url: runtimeFeedUrl,
+    })
+    logger.log("auto updater feed URL overridden via env", { url: runtimeFeedUrl })
+  }
+
   logger.log("auto updater configured", {
     channel: autoUpdater.channel,
     allowPrerelease: autoUpdater.allowPrerelease,
@@ -98,8 +114,8 @@ export async function checkForUpdates(alertOnFail: boolean, killSidecar: () => P
       if (!alertOnFail) return
       await dialog.showMessageBox({
         type: "error",
-        message: "Update check failed.",
-        title: "Update Error",
+        message: "PunkcodeAI 更新检查失败。",
+        title: "更新错误",
       })
       return
     }
@@ -108,17 +124,17 @@ export async function checkForUpdates(alertOnFail: boolean, killSidecar: () => P
     if (!alertOnFail) return
     await dialog.showMessageBox({
       type: "info",
-      message: "You're up to date.",
-      title: "No Updates",
+      message: "PunkcodeAI 已是最新版本。",
+      title: "无可用更新",
     })
     return
   }
 
   const response = await dialog.showMessageBox({
     type: "info",
-    message: `Update ${result.version ?? ""} downloaded. Restart now?`,
-    title: "Update Ready",
-    buttons: ["Restart", "Later"],
+    message: `PunkcodeAI ${result.version ?? ""} 已下载完成，是否立即重启安装？`,
+    title: "更新就绪",
+    buttons: ["立即重启", "稍后"],
     defaultId: 0,
     cancelId: 1,
   })

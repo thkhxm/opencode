@@ -14,8 +14,10 @@ export const PRODUCT_NAME = "PunkcodeAI"
 /**
  * 默认 sub2api 后端 API base URL。
  *
- * dev：通过 Vite define 注入 `import.meta.env.PUNKCODE_API_BASE_URL`
- * prod：默认指向 punkcodeai.myverse.site
+ * 注入方式（按优先级）：
+ *   1. packages/desktop/.env.production 中的 PUNKCODE_API_BASE_URL
+ *      （electron-vite 自动 expose 到 import.meta.env，模板见 packages/desktop/.env.production.example）
+ *   2. 默认 fallback：https://punkcodeai.myverse.site
  *
  * 用户在登录页可显式输入其他 URL 覆盖（写入 localStorage）。
  */

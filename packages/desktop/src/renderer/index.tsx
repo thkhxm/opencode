@@ -231,6 +231,7 @@ const createPlatform = (): Platform => {
 
       const notification = new Notification(title, {
         body: description ?? "",
+        // TODO M9: 替换为 https://punkcodeai.myverse.site/favicon-96x96.png（需用户提供 logo 文件并上传到主站）
         icon: "https://opencode.ai/favicon-96x96-v3.png",
       })
       notification.onclick = () => {

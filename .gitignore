@@ -4,6 +4,8 @@ node_modules
 .sst
 .env
 .env.local
+.env.production
+.env.*.local
 .idea
 .vscode
 .codex

@@ -72,7 +72,7 @@ export type DesktopMenu = {
 export const DESKTOP_MENU: DesktopMenu[] = [
   {
     id: "app",
-    label: "OpenCode",
+    label: "PunkcodeAI",
     platforms: ["macos"],
     items: [
       { type: "item", role: "about" },
@@ -200,19 +200,18 @@ export const DESKTOP_MENU: DesktopMenu[] = [
     id: "help",
     label: "Help",
     items: [
-      { type: "item", label: "OpenCode Documentation", href: "https://opencode.ai/docs" },
-      { type: "item", label: "Support Forum", href: "https://discord.com/invite/opencode" },
-      { type: "item", label: "Export Logs...", command: "logs.export" },
+      { type: "item", label: "PunkcodeAI 文档", href: "https://punkcodeai.myverse.site/docs" },
+      { type: "item", label: "导出日志...", command: "logs.export" },
       { type: "separator" },
       {
         type: "item",
-        label: "Share Feedback",
-        href: "https://github.com/anomalyco/opencode/issues/new?template=feature_request.yml",
+        label: "反馈建议",
+        href: "https://github.com/thkhxm/opencode/issues/new?template=feature_request.yml",
       },
       {
         type: "item",
-        label: "Report a Bug",
-        href: "https://github.com/anomalyco/opencode/issues/new?template=bug_report.yml",
+        label: "报告问题",
+        href: "https://github.com/thkhxm/opencode/issues/new?template=bug_report.yml",
       },
     ],
   },

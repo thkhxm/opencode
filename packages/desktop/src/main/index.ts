@@ -39,15 +39,18 @@ import { migrate } from "./migrate"
 import { checkUpdate, checkForUpdates, installUpdate, setupAutoUpdater } from "./updater"
 import { Deferred, Effect, Fiber } from "effect"
 
+// M8: 用户可见的桌面 app 名称统一脱敏到 PunkcodeAI。
+// 注意：APP_IDS 是 Electron 内部 AppUserModelId（任务栏分组 / 自启动 / Squirrel 升级匹配键），
+// 必须与 electron-builder.config.ts 中的 appId 保持完全一致。
 const APP_NAMES: Record<string, string> = {
-  dev: "OpenCode Dev",
-  beta: "OpenCode Beta",
-  prod: "OpenCode",
+  dev: "PunkcodeAI Dev",
+  beta: "PunkcodeAI Beta",
+  prod: "PunkcodeAI",
 }
 const APP_IDS: Record<string, string> = {
-  dev: "ai.opencode.desktop.dev",
-  beta: "ai.opencode.desktop.beta",
-  prod: "ai.opencode.desktop",
+  dev: "site.myverse.punkcodeai.dev",
+  beta: "site.myverse.punkcodeai.beta",
+  prod: "site.myverse.punkcodeai",
 }
 const TEST_ONBOARDING = process.env.OPENCODE_TEST_ONBOARDING === "1"
 const jsCallStackFeature = "DocumentPolicyIncludeJSCallStacksInCrashReports"
@@ -140,7 +143,7 @@ const main = Effect.gen(function* () {
 
   process.env.OPENCODE_DISABLE_EMBEDDED_WEB_UI = "true"
 
-  const appId = app.isPackaged ? APP_IDS[CHANNEL] : "ai.opencode.desktop.dev"
+  const appId = app.isPackaged ? APP_IDS[CHANNEL] : "site.myverse.punkcodeai.dev"
   const onboardingTestRoot = ((): string | undefined => {
     if (!TEST_ONBOARDING) return
 
@@ -156,7 +159,7 @@ const main = Effect.gen(function* () {
     process.env.XDG_STATE_HOME = join(root, "state")
     return root
   })()
-  app.setName(app.isPackaged ? APP_NAMES[CHANNEL] : "OpenCode Dev")
+  app.setName(app.isPackaged ? APP_NAMES[CHANNEL] : "PunkcodeAI Dev")
   app.setAppUserModelId(appId)
   app.setPath(
     "userData",

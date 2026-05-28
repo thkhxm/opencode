@@ -21,13 +21,26 @@ async function signWindows(configuration: { path: string }) {
 }
 
 const channel = (() => {
-  const raw = process.env.OPENCODE_CHANNEL
+  // 同时兼容 OPENCODE_CHANNEL（旧）与 PUNKCODE_CHANNEL（新），优先取新名
+  const raw = process.env.PUNKCODE_CHANNEL ?? process.env.OPENCODE_CHANNEL
   if (raw === "dev" || raw === "beta" || raw === "prod") return raw
   return "dev"
 })()
 
+/**
+ * M8: 自建 update server feed URL
+ *
+ * - 用户原话："opencode 自建 update server，不依赖外部，我们自己控制桌面端的更新和版本"
+ * - electron-updater 的 generic provider 只需要 url，会自动从该路径下取：
+ *     - latest.yml / latest-mac.yml / latest-linux.yml
+ *     - 对应平台的 .exe / .dmg / .AppImage 安装包
+ * - 默认指向 https://punkcodeai.myverse.site/updates，可通过 PUNKCODE_UPDATE_FEED_URL 覆盖
+ * - 部署说明见 deploy/UPDATE_SERVER.md
+ */
+const updateFeedUrl = process.env.PUNKCODE_UPDATE_FEED_URL ?? "https://punkcodeai.myverse.site/updates"
+
 const getBase = (): Configuration => ({
-  artifactName: "opencode-desktop-${os}-${arch}.${ext}",
+  artifactName: "PunkcodeAI-${os}-${arch}.${ext}",
   directories: {
     output: "dist",
     buildResources: "resources",
@@ -42,6 +55,7 @@ const getBase = (): Configuration => ({
   ],
   mac: {
     category: "public.app-category.developer-tools",
+    // TODO M9: replace with PunkcodeAI logo when user provides
     icon: `resources/icons/icon.icns`,
     hardenedRuntime: true,
     gatekeeperAssess: false,
@@ -53,27 +67,35 @@ const getBase = (): Configuration => ({
   dmg: {
     sign: true,
   },
+  // 内部协议保持 opencode://（CLI / sidecar 已硬编码），用户感知不到 URL 协议
   protocols: {
-    name: "OpenCode",
+    name: "PunkcodeAI",
     schemes: ["opencode"],
   },
   win: {
+    // TODO M9: replace with PunkcodeAI logo when user provides
     icon: `resources/icons/icon.ico`,
+    // M9 TODO: 提供真实签名证书后 publisherName 走 signtoolOptions.publisherName
     signtoolOptions: {
       sign: signWindows,
+      publisherName: "thkhxm",
     },
-    target: ["nsis"],
+    target: ["nsis", "portable"],
     verifyUpdateCodeSignature: false,
   },
   nsis: {
     oneClick: true,
     perMachine: false,
+    // TODO M9: replace with PunkcodeAI logo when user provides
     installerIcon: `resources/icons/icon.ico`,
     installerHeaderIcon: `resources/icons/icon.ico`,
+    shortcutName: "PunkcodeAI",
   },
   linux: {
+    // TODO M9: replace with PunkcodeAI logo when user provides
     icon: `resources/icons`,
     category: "Development",
+    maintainer: "thkhxm",
     target: ["AppImage", "deb", "rpm"],
   },
 })
@@ -85,29 +107,39 @@ function getConfig() {
     case "dev": {
       return {
         ...base,
-        appId: "ai.opencode.desktop.dev",
-        productName: "OpenCode Dev",
-        rpm: { packageName: "opencode-dev" },
+        appId: "site.myverse.punkcodeai.dev",
+        productName: "PunkcodeAI Dev",
+        rpm: { packageName: "punkcodeai-dev" },
+        publish: {
+          provider: "generic" as const,
+          url: `${updateFeedUrl}/dev`,
+        },
       }
     }
     case "beta": {
       return {
         ...base,
-        appId: "ai.opencode.desktop.beta",
-        productName: "OpenCode Beta",
-        protocols: { name: "OpenCode Beta", schemes: ["opencode"] },
-        publish: { provider: "github", owner: "anomalyco", repo: "opencode-beta", channel: "latest" },
-        rpm: { packageName: "opencode-beta" },
+        appId: "site.myverse.punkcodeai.beta",
+        productName: "PunkcodeAI Beta",
+        protocols: { name: "PunkcodeAI Beta", schemes: ["opencode"] },
+        publish: {
+          provider: "generic" as const,
+          url: `${updateFeedUrl}/beta`,
+        },
+        rpm: { packageName: "punkcodeai-beta" },
       }
     }
     case "prod": {
       return {
         ...base,
-        appId: "ai.opencode.desktop",
-        productName: "OpenCode",
-        protocols: { name: "OpenCode", schemes: ["opencode"] },
-        publish: { provider: "github", owner: "anomalyco", repo: "opencode", channel: "latest" },
-        rpm: { packageName: "opencode" },
+        appId: "site.myverse.punkcodeai",
+        productName: "PunkcodeAI",
+        protocols: { name: "PunkcodeAI", schemes: ["opencode"] },
+        publish: {
+          provider: "generic" as const,
+          url: updateFeedUrl,
+        },
+        rpm: { packageName: "punkcodeai" },
       }
     }
   }
