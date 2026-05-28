@@ -28,6 +28,27 @@ export type FatalRendererError = {
   os?: string
 }
 
+/**
+ * PunkcodeAI 凭据载荷（M6）。
+ *
+ * 由 renderer 端从 sub2api `/cli/api-key` + `/cli/llm` 拿到，
+ * 通过 IPC 转给主进程，主进程再透传给 sidecar 进程的 Provider 系统。
+ *
+ * 重要：sk- key **不入 localStorage / 不入 electron-store / 不入磁盘**，仅在主进程内存 + sidecar 进程内存。
+ */
+export type PunkcodeCredentials = {
+  apiKey: string
+  baseUrl: string
+  anthropicBaseUrl: string
+  geminiBaseUrl: string
+  models: Array<{
+    id: string
+    name: string
+    provider?: string
+    context_window?: number
+  }>
+}
+
 export type ElectronAPI = {
   killSidecar: () => Promise<void>
   installCli: () => Promise<string>
@@ -92,4 +113,8 @@ export type ElectronAPI = {
   setBackgroundColor: (color: string) => Promise<void>
   exportDebugLogs: () => Promise<string>
   recordFatalRendererError: (error: FatalRendererError) => Promise<void>
+
+  // M6: PunkcodeAI 凭据透传给 sidecar。
+  setPunkcodeCredentials: (credentials: PunkcodeCredentials) => Promise<void>
+  clearPunkcodeCredentials: () => Promise<void>
 }

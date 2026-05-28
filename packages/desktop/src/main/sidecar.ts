@@ -21,12 +21,38 @@ type StartCommand = {
 }
 
 type StopCommand = { type: "stop" }
-type SidecarCommand = StartCommand | StopCommand
+
+/**
+ * M6: 主进程把 PunkcodeAI 凭据透传过来。
+ *
+ * sidecar 收到后:
+ *   1. 把 sk-key 注入 process.env.OPENCODE_AUTH_CONTENT（auth.json 的 JSON 字符串形式）
+ *   2. 把 provider 定义 + 模型列表注入 process.env.OPENCODE_CONFIG_CONTENT
+ *   3. 调 InstanceRuntime.disposeAllInstances() 清掉 Provider/Config 等的 InstanceState cache
+ *   4. 回 credentials-updated ACK
+ *
+ * 之后下一次 Provider.list / Provider.getLanguage 会重新初始化，读到新 env 拿到 PunkcodeAI provider。
+ */
+type SetCredentialsCommand = {
+  type: "set-credentials"
+  credentials: {
+    apiKey: string
+    baseUrl: string
+    anthropicBaseUrl: string
+    geminiBaseUrl: string
+    models: Array<{ id: string; name: string; provider?: string; context_window?: number }>
+  }
+}
+
+type ClearCredentialsCommand = { type: "clear-credentials" }
+
+type SidecarCommand = StartCommand | StopCommand | SetCredentialsCommand | ClearCredentialsCommand
 
 type SidecarMessage =
   | { type: "sqlite"; progress: { type: "InProgress"; value: number } | { type: "Done" } }
   | { type: "ready" }
   | { type: "stopped" }
+  | { type: "credentials-updated" }
   | { type: "error"; error: { message: string; stack?: string } }
 
 type ParentPort = {
@@ -44,11 +70,20 @@ let listener: Listener | undefined
 parentPort.on("message", (event) => {
   const command = parseCommand(event.data)
   if (!command) return
-  if (command.type === "stop") {
-    void stop()
-    return
+  switch (command.type) {
+    case "stop":
+      void stop()
+      return
+    case "set-credentials":
+      void applyPunkcodeCredentials(command.credentials)
+      return
+    case "clear-credentials":
+      void clearPunkcodeCredentials()
+      return
+    case "start":
+      void start(command)
+      return
   }
-  void start(command)
 })
 
 async function start(command: StartCommand) {
@@ -148,9 +183,16 @@ function useEnvProxy() {
 
 function parseCommand(value: unknown): SidecarCommand | undefined {
   if (!value || typeof value !== "object") return
-  const command = value as Partial<StartCommand | StopCommand>
-  if (command.type === "stop") return { type: "stop" }
-  if (command.type !== "start") return
+  const raw = value as { type?: unknown }
+  if (raw.type === "stop") return { type: "stop" }
+  if (raw.type === "clear-credentials") return { type: "clear-credentials" }
+  if (raw.type === "set-credentials") return parseSetCredentialsCommand(value)
+  if (raw.type === "start") return parseStartCommand(value)
+  return
+}
+
+function parseStartCommand(value: unknown): StartCommand | undefined {
+  const command = value as Partial<StartCommand>
   if (typeof command.hostname !== "string") return
   if (typeof command.port !== "number") return
   if (typeof command.password !== "string") return
@@ -163,6 +205,139 @@ function parseCommand(value: unknown): SidecarCommand | undefined {
     password: command.password,
     userDataPath: command.userDataPath,
     needsMigration: command.needsMigration,
+  }
+}
+
+function parseSetCredentialsCommand(value: unknown): SetCredentialsCommand | undefined {
+  const command = value as { credentials?: unknown }
+  const creds = command.credentials as Partial<SetCredentialsCommand["credentials"]> | undefined
+  if (!creds || typeof creds !== "object") return
+  if (typeof creds.apiKey !== "string" || creds.apiKey.length === 0) return
+  if (typeof creds.baseUrl !== "string" || creds.baseUrl.length === 0) return
+  return {
+    type: "set-credentials",
+    credentials: {
+      apiKey: creds.apiKey,
+      baseUrl: creds.baseUrl,
+      anthropicBaseUrl: typeof creds.anthropicBaseUrl === "string" ? creds.anthropicBaseUrl : "",
+      geminiBaseUrl: typeof creds.geminiBaseUrl === "string" ? creds.geminiBaseUrl : "",
+      models: Array.isArray(creds.models)
+        ? creds.models
+            .filter((m): m is { id: string; name: string; provider?: string; context_window?: number } => {
+              if (!m || typeof m !== "object") return false
+              const item = m as { id?: unknown; name?: unknown }
+              return typeof item.id === "string" && typeof item.name === "string"
+            })
+            .map((m) => ({
+              id: m.id,
+              name: m.name,
+              provider: typeof m.provider === "string" ? m.provider : undefined,
+              context_window: typeof m.context_window === "number" ? m.context_window : undefined,
+            }))
+        : [],
+    },
+  }
+}
+
+/**
+ * M6: PunkcodeAI 内置 provider ID。
+ * 与 renderer 端约定一致（renderer 侧 dialog-select-model 通过 visibility 过滤，
+ * 在 HIDE_PROVIDER_UI 模式下也能让这个 provider 的模型出现在下拉里）。
+ */
+const PUNKCODE_PROVIDER_ID = "punkcodeai"
+
+let currentPunkcodeCredentials: SetCredentialsCommand["credentials"] | null = null
+
+/**
+ * 把 PunkcodeAI 凭据塞进 process.env 并 dispose 所有 instance state cache,
+ * 让下一次 provider.list / config.get 重新初始化。
+ */
+async function applyPunkcodeCredentials(credentials: SetCredentialsCommand["credentials"]): Promise<void> {
+  try {
+    currentPunkcodeCredentials = credentials
+
+    // 1) OPENCODE_AUTH_CONTENT：注入 sk-key。该 env 一旦设置就会替换整个 auth.all() 返回值，
+    //    所以桌面端只支持 PunkcodeAI 一个 provider 是符合设计的（M5 已隐藏 provider UI）。
+    process.env.OPENCODE_AUTH_CONTENT = JSON.stringify({
+      [PUNKCODE_PROVIDER_ID]: {
+        type: "api",
+        key: credentials.apiKey,
+      },
+    })
+
+    // 2) OPENCODE_CONFIG_CONTENT：注入 punkcodeai provider 定义 + 模型列表。
+    //    npm 用 @ai-sdk/openai-compatible（sub2api 后端兼容 OpenAI Chat Completions 协议）。
+    //    每个模型尽量给完整 cost/limit/capabilities 字段，避免 Provider.transform 走 NaN 分支。
+    const models: Record<string, unknown> = {}
+    for (const model of credentials.models) {
+      const ctx = typeof model.context_window === "number" && model.context_window > 0 ? model.context_window : 200_000
+      models[model.id] = {
+        id: model.id,
+        name: model.name,
+        // 计费在 sub2api 网关侧统一结算，cost 字段对桌面端只起 UI 提示作用，全部置 0 即可。
+        cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+        limit: { context: ctx, output: Math.min(ctx, 8192) },
+        modalities: { input: ["text", "image"], output: ["text"] },
+        attachment: true,
+        reasoning: false,
+        temperature: true,
+        tool_call: true,
+        provider: { npm: "@ai-sdk/openai-compatible", api: credentials.baseUrl },
+      }
+    }
+    process.env.OPENCODE_CONFIG_CONTENT = JSON.stringify({
+      // 限定只允许 punkcodeai——避免 shell 里残留的 OPENAI_API_KEY / ANTHROPIC_API_KEY 等
+      // 通过 env 自动连上原生 provider，污染模型下拉。
+      enabled_providers: [PUNKCODE_PROVIDER_ID],
+      provider: {
+        [PUNKCODE_PROVIDER_ID]: {
+          name: "PunkcodeAI",
+          npm: "@ai-sdk/openai-compatible",
+          api: credentials.baseUrl,
+          options: {
+            baseURL: credentials.baseUrl,
+            apiKey: credentials.apiKey,
+          },
+          models,
+        },
+      },
+    })
+
+    await reloadProviderState()
+  } catch (error) {
+    console.warn("failed to apply PunkcodeAI credentials", error)
+  } finally {
+    parentPort.postMessage({ type: "credentials-updated" })
+  }
+}
+
+async function clearPunkcodeCredentials(): Promise<void> {
+  try {
+    currentPunkcodeCredentials = null
+    delete process.env.OPENCODE_AUTH_CONTENT
+    delete process.env.OPENCODE_CONFIG_CONTENT
+    await reloadProviderState()
+  } catch (error) {
+    console.warn("failed to clear PunkcodeAI credentials", error)
+  } finally {
+    parentPort.postMessage({ type: "credentials-updated" })
+  }
+}
+
+/**
+ * 让 sidecar 内已经缓存的 InstanceState（Provider / Config / ...）作废，
+ * 下一次 HTTP 请求触发 instance load 时会读到最新 env。
+ *
+ * 注意：sidecar 启动早期（start() 还没把 server 立起来）调用此函数也是安全的，
+ * 因为还没有任何 instance load 过；virtual:opencode-server 模块此时已 import。
+ */
+async function reloadProviderState(): Promise<void> {
+  void currentPunkcodeCredentials // 仅作内存持有；reload 后下游读 env 拿凭据。
+  try {
+    const { InstanceRuntime } = await import("virtual:opencode-server")
+    await InstanceRuntime.disposeAllInstances()
+  } catch (error) {
+    console.warn("failed to dispose instances after credentials change", error)
   }
 }
 

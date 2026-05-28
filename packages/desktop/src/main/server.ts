@@ -5,7 +5,7 @@ import type { Details } from "electron"
 import { DEFAULT_SERVER_URL_KEY, WSL_ENABLED_KEY } from "./constants"
 import { getUserShell, loadShellEnv } from "./shell-env"
 import { getStore } from "./store"
-import type { SqliteMigrationProgress } from "../preload/types"
+import type { PunkcodeCredentials, SqliteMigrationProgress } from "../preload/types"
 
 export type WslConfig = { enabled: boolean }
 
@@ -15,9 +15,20 @@ type SidecarMessage =
   | { type: "sqlite"; progress: SqliteMigrationProgress }
   | { type: "ready" }
   | { type: "stopped" }
+  | { type: "credentials-updated" }
   | { type: "error"; error: { message: string; stack?: string } }
 
-export type SidecarListener = { stop: () => Promise<void> }
+export type SidecarListener = {
+  stop: () => Promise<void>
+  /**
+   * 把 PunkcodeAI sk-key + 模型列表透传给 sidecar 进程。
+   * 内部以 utilityProcess.postMessage 实现；sidecar 收到后更新 process.env
+   * 并 dispose 所有 instance state，下一次 provider.list 会重读 env 拿到新凭据。
+   */
+  setCredentials: (credentials: PunkcodeCredentials) => Promise<void>
+  /** 清掉 PunkcodeAI 凭据（退出登录） */
+  clearCredentials: () => Promise<void>
+}
 
 const SIDECAR_SERVICE_NAME = "opencode server"
 const SIDECAR_START_STALL_TIMEOUT = 60_000
@@ -182,6 +193,38 @@ export async function spawnLocalServer(
 
   let stopping: Promise<void> | undefined
 
+  // M6: 接收 sidecar 对 set-credentials / clear-credentials 的 ACK。
+  // 设计成"取最近一次 pending"，多并发情况下后到的会覆盖前面的 resolver；
+  // 实际调用方都是 await 串行，不会有并发，但兜底安全。
+  let pendingCredentialsAck: (() => void) | undefined
+  child.on("message", (raw: unknown) => {
+    if (!raw || typeof raw !== "object") return
+    if ((raw as { type?: unknown }).type !== "credentials-updated") return
+    if (pendingCredentialsAck) {
+      const resolver = pendingCredentialsAck
+      pendingCredentialsAck = undefined
+      resolver()
+    }
+  })
+
+  const SIDECAR_CREDENTIALS_ACK_TIMEOUT = 5000
+  function postCredentialsMessage(message: Record<string, unknown>): Promise<void> {
+    if (exited) return Promise.resolve()
+    return new Promise<void>((resolve) => {
+      let settled = false
+      const finish = () => {
+        if (settled) return
+        settled = true
+        clearTimeout(timeout)
+        pendingCredentialsAck = undefined
+        resolve()
+      }
+      const timeout = setTimeout(finish, SIDECAR_CREDENTIALS_ACK_TIMEOUT)
+      pendingCredentialsAck = finish
+      child.postMessage(message)
+    })
+  }
+
   return {
     listener: {
       stop: () => {
@@ -196,6 +239,9 @@ export async function spawnLocalServer(
         ])
         return stopping
       },
+      setCredentials: (credentials: PunkcodeCredentials) =>
+        postCredentialsMessage({ type: "set-credentials", credentials }),
+      clearCredentials: () => postCredentialsMessage({ type: "clear-credentials" }),
     },
     health: { wait },
   }

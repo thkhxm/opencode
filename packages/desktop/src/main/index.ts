@@ -89,6 +89,27 @@ async function killSidecar() {
   await current.stop()
 }
 
+/**
+ * M6: 主进程内存中保存当前 PunkcodeAI 凭据。
+ *
+ * - sk- key 仅在内存（不写 electron-store / 不写磁盘）；进程退出即丢。
+ * - 用于：sidecar 重启时（如 update / 异常重连）自动重灌；启动时立刻推一次。
+ */
+type PunkcodeCredentialsPayload = Parameters<SidecarListener["setCredentials"]>[0]
+let pendingPunkcodeCredentials: PunkcodeCredentialsPayload | null = null
+
+async function setPunkcodeCredentialsToSidecar(credentials: PunkcodeCredentialsPayload) {
+  pendingPunkcodeCredentials = credentials
+  if (!server) return
+  await server.setCredentials(credentials)
+}
+
+async function clearPunkcodeCredentialsFromSidecar() {
+  pendingPunkcodeCredentials = null
+  if (!server) return
+  await server.clearCredentials()
+}
+
 function ensureLoopbackNoProxy() {
   const loopback = ["127.0.0.1", "localhost", "::1"]
   const upsert = (key: string) => {
@@ -258,6 +279,8 @@ const main = Effect.gen(function* () {
     setBackgroundColor: (color) => setBackgroundColor(color),
     exportDebugLogs: () => exportDebugLogs(),
     recordFatalRendererError: (error) => writeLog("renderer", "fatal renderer error", { ...error }, "error"),
+    setPunkcodeCredentials: (credentials) => setPunkcodeCredentialsToSidecar(credentials),
+    clearPunkcodeCredentials: () => clearPunkcodeCredentialsFromSidecar(),
   })
 
   yield* Effect.promise(() => app.whenReady())
@@ -335,6 +358,18 @@ const main = Effect.gen(function* () {
       }),
     )
     server = listener
+    // 如果 renderer 在 sidecar 启动前已经通过 IPC 推过凭据（dev/race 场景），
+    // 此时 sidecar 已 ready，立刻把内存中的最新凭据推过去。
+    if (pendingPunkcodeCredentials) {
+      const creds = pendingPunkcodeCredentials
+      yield* Effect.promise(async () => {
+        try {
+          await listener.setCredentials(creds)
+        } catch (e) {
+          writeLog("utility", "set initial punkcode credentials failed", { error: String(e) }, "warn")
+        }
+      })
+    }
     yield* Deferred.succeed(serverReady, {
       url,
       username: "opencode",

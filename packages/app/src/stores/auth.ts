@@ -1,17 +1,26 @@
 /**
  * PunkcodeAI 桌面端登录态（仅内存 + refresh token 本地持久化）。
  *
- * 设计要点（与 §M5 规范对齐）：
- *   1. access_token / 用户信息**只在内存**保存；进程重启即丢，必须用 refresh_token 拿回来。
+ * 设计要点（与 §M5/§M6 规范对齐）：
+ *   1. access_token / 用户信息 / **sk- API Key** / 模型列表**只在内存**保存；
+ *      进程重启即丢，必须用 refresh_token 重新拉。
  *   2. refresh_token + accountID 持久化到 localStorage（renderer 端唯一可靠的持久化通道）。
  *      （opencode 原生 SQLite AccountTable 在 sidecar 进程里，renderer 不能直接访问；
  *      M5 阶段先用 localStorage 兜底——M6/M7 若需要把"已登录"信息暴露给 sidecar，再开 IPC）。
  *   3. 主动 refresh：access_token 过期前 `expires_in / 2` 触发一次刷新；
  *      失败立即 logout，引导用户重新登录。
  *   4. 不暴露 access_token / refresh_token / sk- key 给上层组件，只提供 isLoggedIn / state / signIn / signOut。
- *   5. 调用 sub2api `/api/v1/cli/{register,login,refresh}` 直接走 fetch；不依赖 opencode sidecar。
+ *      sk- 仅通过 IPC `setPunkcodeCredentials` 透传给主进程 → sidecar 用于 LLM 调用；
+ *      sidecar 内部存在内存，从不落盘。
+ *   5. 调用 sub2api `/api/v1/cli/{register,login,refresh,api-key,llm}` 直接走 fetch；不依赖 opencode sidecar。
  *      （opencode `Account.Service` 的 credentials flow 也走同样的 endpoint，sidecar 端的实现
  *      仅在 CLI 路径上使用——见 packages/opencode/src/account/credentials.ts。）
+ *
+ * M6 新增字段（apiKey / models / *BaseUrl）的生命周期：
+ *   - signIn / signUp / bootstrap 成功 → 拉 /cli/api-key + /cli/llm → 进 store + 推 sidecar
+ *   - refresh 成功 → 不重拉 sk-（sub2api 端 sk- 无过期；access_token refresh 只是续期会话）；
+ *     但需要确保 sk- 已经在 sidecar 里（启动后第一次 refresh 触发的）
+ *   - signOut / refresh 失败 → 清掉 store + 通知 sidecar 清掉
  */
 
 import { createMemo, createSignal } from "solid-js"
@@ -46,12 +55,24 @@ interface CredentialsTokenPair {
   token_type: string
 }
 
+/** sub2api `/cli/llm` 返回的 model 元数据（PunkcodeAI 真实可用模型列表） */
+export type PunkcodeModel = {
+  id: string
+  name: string
+  provider?: string
+  context_window?: number
+}
+
 /**
  * 登录后的内存态。
  *
  * - `expiry` 是 epoch ms（`Date.now()` 同维度）
  * - `accountID` 与 opencode Account 服务一致：`${url}:${email}`
  *   （详见 packages/opencode/src/account/credentials.ts:buildAccountID）
+ * - `apiKey` / `models` / `*BaseUrl` 是 M6 新增；只在内存，绝不入 localStorage。
+ *   sk- 一旦丢失，下一次 access_token refresh 不会重新拉；需要手动 signIn 才补回来。
+ *   （考虑到 sub2api 端 sk- 无过期，且 refresh 后我们也会重新调一次 syncCredentials，
+ *   这个边界条件不会在正常路径出现。）
  */
 export type AuthState = {
   server: string
@@ -65,6 +86,11 @@ export type AuthState = {
     nickname: string
     balanceUsd: number
   }
+  apiKey: string
+  llmBaseUrl: string
+  anthropicBaseUrl: string
+  geminiBaseUrl: string
+  models: PunkcodeModel[]
 }
 
 /** sub2api 业务错误（envelope.code !== 0） */
@@ -168,6 +194,37 @@ async function callApi<T>(url: string, body: unknown, label: string): Promise<T>
   return envelope.data as T
 }
 
+/**
+ * 调 sub2api 鉴权后的 GET endpoint（带 Bearer token + envelope 解码）。
+ * 与 callApi 共用 envelope/错误约定，但走 GET。
+ */
+async function callAuthorizedGet<T>(url: string, accessToken: string, label: string): Promise<T> {
+  let response: Response
+  try {
+    response = await fetch(url, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+    })
+  } catch (cause) {
+    throw new AccountError(`${label}: HTTP request failed`, { cause })
+  }
+
+  let envelope: CredentialsEnvelope<unknown>
+  try {
+    envelope = (await response.json()) as CredentialsEnvelope<unknown>
+  } catch (cause) {
+    throw new AccountError(`${label}: failed to decode envelope`, { cause })
+  }
+
+  if (typeof envelope.code !== "number" || typeof envelope.message !== "string") {
+    throw new AccountError(`${label}: malformed envelope`)
+  }
+  if (envelope.code !== 0) {
+    throw new CredentialsError(envelope.code, envelope.message)
+  }
+  return envelope.data as T
+}
+
 // ============================================================
 // store
 // ============================================================
@@ -214,10 +271,13 @@ const clearSession = () => {
   writePersisted(null)
 }
 
-const handleAuthSuccess = (server: string, auth: CredentialsAuthResponse) => {
+const handleAuthSuccess = async (server: string, auth: CredentialsAuthResponse) => {
   const url = normalizeServer(server)
   const expiry = Date.now() + auth.expires_in * 1000
-  applySession({
+  // 先拉 PunkcodeAI sk-key + 模型列表（用刚拿到的 access_token）。
+  // 任何一步失败 → 整体抛出，由 UI 提示用户重试（避免半截状态：登录看似成功但聊天不可用）。
+  const creds = await syncCredentialsCore(url, auth.access_token)
+  const next: AuthState = {
     server: url,
     accountID: buildAccountID(url, auth.user.email),
     accessToken: auth.access_token,
@@ -229,7 +289,14 @@ const handleAuthSuccess = (server: string, auth: CredentialsAuthResponse) => {
       nickname: auth.user.nickname,
       balanceUsd: auth.user.balance_usd,
     },
-  })
+    ...creds,
+  }
+  // 关键：必须先把 sk- 推到 sidecar，再 applySession 触发 UI 进入登录态。
+  // 否则 AuthGate 抢先渲染、provider query 跑在没有 punkcodeai 凭据的 sidecar 上，
+  // 拿到空 provider list 缓存，模型下拉空白。
+  // pushCredentialsToSidecar 内部已吞错（IPC 失败不抛），所以正常路径不会因此 throw。
+  await pushCredentialsToSidecar(next)
+  applySession(next)
 }
 
 const applyRefreshedPair = (pair: CredentialsTokenPair) => {
@@ -242,6 +309,34 @@ const applyRefreshedPair = (pair: CredentialsTokenPair) => {
     refreshToken: pair.refresh_token,
     expiry,
   })
+}
+
+/**
+ * 每次 refresh 成功后，确保 sk- 已被 sidecar 拿到。
+ *
+ * 路径 1（正常）：登录时 handleAuthSuccess 已经拉到 sk- 并推给 sidecar，refresh 不需要重拉。
+ *                 但仍重推一次 IPC，覆盖 Electron 主进程因故重启丢失内存的边界情况。
+ * 路径 2（边界）：bootstrap 没拉到 sk-（极小概率：bootstrap 阶段 /cli/api-key 限流/失败但
+ *                 refresh 成功），下次 refresh 检测到 store.apiKey === ""，重新调 syncCredentialsCore。
+ */
+async function ensureCredentialsAfterRefresh(): Promise<void> {
+  const current = state()
+  if (!current) return
+  if (!current.apiKey) {
+    try {
+      const creds = await syncCredentialsCore(current.server, current.accessToken)
+      const next = { ...current, ...creds }
+      // 先推 sidecar 再 applySession，避免 reactive 订阅者抢跑 provider query 拿空数据。
+      await pushCredentialsToSidecar(next)
+      applySession(next)
+    } catch {
+      // refresh 路径上不要因为补拉 sk- 失败把用户踢下线；下次 refresh 会再尝试。
+    }
+    return
+  }
+  // 已缓存 sk-，只是重推一次，覆盖主进程重启等边界。
+  // 此路径下 state 不变，没有 reactive 副作用，无需 swap 顺序。
+  await pushCredentialsToSidecar(current)
 }
 
 async function callRegister(
@@ -265,6 +360,104 @@ async function callRefresh(server: string, refreshToken: string): Promise<Creden
   return callApi<CredentialsTokenPair>(url, { refresh_token: refreshToken }, "Credentials.refresh")
 }
 
+// ============================================================
+// M6: sk- API Key + LLM 元数据
+// ============================================================
+
+interface CliApiKeyResponse {
+  /** sk- 开头的真实 API Key */
+  key: string
+}
+
+interface CliLlmResponse {
+  /** OpenAI-compatible base URL，如 http://localhost:38080/v1 */
+  base_url: string
+  /** Anthropic 风格 base URL */
+  anthropic_base_url: string
+  /** Gemini 风格 base URL */
+  gemini_base_url: string
+  /** 用户当前可见的模型列表（绑定 group 决定） */
+  models: PunkcodeModel[]
+}
+
+async function callApiKey(server: string, accessToken: string): Promise<CliApiKeyResponse> {
+  const url = `${normalizeServer(server)}/api/v1/cli/api-key`
+  return callAuthorizedGet<CliApiKeyResponse>(url, accessToken, "Credentials.apiKey")
+}
+
+async function callLlm(server: string, accessToken: string): Promise<CliLlmResponse> {
+  const url = `${normalizeServer(server)}/api/v1/cli/llm`
+  return callAuthorizedGet<CliLlmResponse>(url, accessToken, "Credentials.llm")
+}
+
+/**
+ * Renderer → main 进程 IPC：推 sk- 凭据给 sidecar。
+ *
+ * 调用方：登录/注册/bootstrap 成功后、refresh 续期成功后（如果第一次没拉到）。
+ * 失败处理：当桌面端不在 Electron 中（如纯浏览器 dev 调试），window.api 为 undefined，
+ *           IPC 直接跳过，不影响 store 流程；用户不会被踢下线。
+ */
+async function pushCredentialsToSidecar(state: AuthState): Promise<void> {
+  const api = (typeof window !== "undefined" ? window.api : undefined) as
+    | {
+        setPunkcodeCredentials?: (input: {
+          apiKey: string
+          baseUrl: string
+          anthropicBaseUrl: string
+          geminiBaseUrl: string
+          models: PunkcodeModel[]
+        }) => Promise<void>
+      }
+    | undefined
+  if (!api?.setPunkcodeCredentials) return
+  try {
+    await api.setPunkcodeCredentials({
+      apiKey: state.apiKey,
+      baseUrl: state.llmBaseUrl,
+      anthropicBaseUrl: state.anthropicBaseUrl,
+      geminiBaseUrl: state.geminiBaseUrl,
+      models: state.models,
+    })
+  } catch {
+    // IPC 失败也不要踢用户下线；下次 refresh 会再尝试。
+  }
+}
+
+/** 通知 sidecar 清掉 PunkcodeAI 凭据（退出登录路径用） */
+async function clearCredentialsOnSidecar(): Promise<void> {
+  const api = (typeof window !== "undefined" ? window.api : undefined) as
+    | { clearPunkcodeCredentials?: () => Promise<void> }
+    | undefined
+  if (!api?.clearPunkcodeCredentials) return
+  try {
+    await api.clearPunkcodeCredentials()
+  } catch {
+    // 清理失败不阻塞退出登录。
+  }
+}
+
+/**
+ * 拉 sk- API Key + LLM 元数据并塞进 store + 推 sidecar。
+ *
+ * @throws 网络/业务错误（同 callApi 的错误约定）
+ */
+async function syncCredentialsCore(server: string, accessToken: string): Promise<{
+  apiKey: string
+  llmBaseUrl: string
+  anthropicBaseUrl: string
+  geminiBaseUrl: string
+  models: PunkcodeModel[]
+}> {
+  const [apiKeyRes, llmRes] = await Promise.all([callApiKey(server, accessToken), callLlm(server, accessToken)])
+  return {
+    apiKey: apiKeyRes.key,
+    llmBaseUrl: llmRes.base_url,
+    anthropicBaseUrl: llmRes.anthropic_base_url,
+    geminiBaseUrl: llmRes.gemini_base_url,
+    models: Array.isArray(llmRes.models) ? llmRes.models : [],
+  }
+}
+
 /**
  * 后台刷新：定时器到期触发，或者手动调（如启动 bootstrap）。
  *
@@ -277,10 +470,12 @@ async function backgroundRefresh(): Promise<void> {
   try {
     const pair = await callRefresh(current.server, current.refreshToken)
     applyRefreshedPair(pair)
+    await ensureCredentialsAfterRefresh()
   } catch (err) {
     if (err instanceof CredentialsError) {
       // refresh_token 失效（401 / 业务错），强制退出。
       clearSession()
+      void clearCredentialsOnSidecar()
       return
     }
     // 网络 / 5xx：保留会话，30s 后重试（不让一次 flaky 网络踢用户下线）。
@@ -331,7 +526,17 @@ async function bootstrapInner(): Promise<void> {
     const emailFromID = persisted.accountID.startsWith(`${url}:`)
       ? persisted.accountID.slice(url.length + 1)
       : persisted.accountID
-    applySession({
+
+    // M6: bootstrap 也要拉 sk-key + 模型列表（用刚刷出来的 access_token）。
+    // 失败不阻塞 bootstrap：先把会话恢复出来，UI 仍可登录态；下次 refresh 会触发 ensureCredentialsAfterRefresh 补拉。
+    let creds: Awaited<ReturnType<typeof syncCredentialsCore>>
+    try {
+      creds = await syncCredentialsCore(url, pair.access_token)
+    } catch {
+      creds = { apiKey: "", llmBaseUrl: "", anthropicBaseUrl: "", geminiBaseUrl: "", models: [] }
+    }
+
+    const next: AuthState = {
       server: url,
       accountID: persisted.accountID,
       accessToken: pair.access_token,
@@ -343,7 +548,11 @@ async function bootstrapInner(): Promise<void> {
         nickname: emailFromID,
         balanceUsd: 0,
       },
-    })
+      ...creds,
+    }
+    // 同 handleAuthSuccess：先推 sidecar 再 applySession，避免 AuthGate 抢跑 provider query 拿空数据。
+    if (creds.apiKey) await pushCredentialsToSidecar(next)
+    applySession(next)
   } catch {
     // refresh_token 过期 / 网络故障 → 清掉持久化让用户重新登录。
     writePersisted(null)
@@ -383,7 +592,7 @@ export const useAuth = () => ({
    */
   async signIn(input: { email: string; password: string }, server: string = DEFAULT_API_BASE_URL): Promise<void> {
     const auth = await callLogin(server, input)
-    handleAuthSuccess(server, auth)
+    await handleAuthSuccess(server, auth)
   },
 
   /** 注册并自动登录 */
@@ -392,12 +601,13 @@ export const useAuth = () => ({
     server: string = DEFAULT_API_BASE_URL,
   ): Promise<void> {
     const auth = await callRegister(server, input)
-    handleAuthSuccess(server, auth)
+    await handleAuthSuccess(server, auth)
   },
 
-  /** 退出登录：清内存 + 清 localStorage + 停定时器 */
+  /** 退出登录：清内存 + 清 localStorage + 停定时器 + 通知 sidecar 清掉 sk- */
   async signOut(): Promise<void> {
     clearSession()
+    await clearCredentialsOnSidecar()
   },
 
   /** 主动触发一次 refresh（调试 / "余额刷新"按钮 等场景用；UI 层一般不用） */

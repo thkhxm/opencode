@@ -6,6 +6,7 @@ import type { DesktopMenuAction } from "@opencode-ai/app/desktop-menu"
 import type {
   InitStep,
   FatalRendererError,
+  PunkcodeCredentials,
   ServerReadyData,
   SqliteMigrationProgress,
   TitlebarTheme,
@@ -43,6 +44,10 @@ type Deps = {
   setBackgroundColor: (color: string) => void
   exportDebugLogs: () => Promise<string>
   recordFatalRendererError: (error: FatalRendererError) => Promise<void> | void
+
+  // M6: PunkcodeAI 凭据透传给 sidecar；clear 路径用于退出登录。
+  setPunkcodeCredentials: (credentials: PunkcodeCredentials) => Promise<void> | void
+  clearPunkcodeCredentials: () => Promise<void> | void
 }
 
 export function registerIpcHandlers(deps: Deps) {
@@ -78,6 +83,10 @@ export function registerIpcHandlers(deps: Deps) {
   ipcMain.handle("record-fatal-renderer-error", (_event: IpcMainInvokeEvent, error: FatalRendererError) =>
     deps.recordFatalRendererError(error),
   )
+  ipcMain.handle("set-punkcode-credentials", (_event: IpcMainInvokeEvent, credentials: PunkcodeCredentials) =>
+    deps.setPunkcodeCredentials(credentials),
+  )
+  ipcMain.handle("clear-punkcode-credentials", () => deps.clearPunkcodeCredentials())
   ipcMain.handle("store-get", (_event: IpcMainInvokeEvent, name: string, key: string) => {
     try {
       const store = getStore(name)

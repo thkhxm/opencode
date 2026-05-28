@@ -27,4 +27,7 @@ declare module "virtual:opencode-server" {
     export const run: typeof import("../../../opencode/dist/types/src/node").JsonMigration.run
   }
   export const bootstrap: typeof import("../../../opencode/dist/types/src/node").bootstrap
+  export namespace InstanceRuntime {
+    export const disposeAllInstances: typeof import("../../../opencode/dist/types/src/node").InstanceRuntime.disposeAllInstances
+  }
 }

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron"
-import type { ElectronAPI, InitStep, SqliteMigrationProgress } from "./types"
+import type { ElectronAPI, InitStep, PunkcodeCredentials, SqliteMigrationProgress } from "./types"
 
 const api: ElectronAPI = {
   killSidecar: () => ipcRenderer.invoke("kill-sidecar"),
@@ -81,6 +81,11 @@ const api: ElectronAPI = {
   setBackgroundColor: (color: string) => ipcRenderer.invoke("set-background-color", color),
   exportDebugLogs: () => ipcRenderer.invoke("export-debug-logs"),
   recordFatalRendererError: (error) => ipcRenderer.invoke("record-fatal-renderer-error", error),
+
+  // M6: PunkcodeAI 凭据透传。
+  setPunkcodeCredentials: (credentials: PunkcodeCredentials) =>
+    ipcRenderer.invoke("set-punkcode-credentials", credentials),
+  clearPunkcodeCredentials: () => ipcRenderer.invoke("clear-punkcode-credentials"),
 }
 
 contextBridge.exposeInMainWorld("api", api)
