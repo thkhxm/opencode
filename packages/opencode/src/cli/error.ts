@@ -55,6 +55,12 @@ export function FormatError(input: unknown): string | undefined {
     return stringField(input, "message") ?? ""
   }
 
+  // CredentialsError (PunkcodeAI sub2api business error)
+  // 后端 envelope 返 code != 0 时 message 字段已是可读错误描述（"密码错"等），直接透传给 CLI。
+  if (isTaggedError(input, "CredentialsError")) {
+    return stringField(input, "message") ?? ""
+  }
+
   // ProviderModelNotFoundError: { providerID: string, modelID: string, suggestions?: string[] }
   const providerModelNotFound = configData(input, "ProviderModelNotFoundError")
   if (providerModelNotFound) {
