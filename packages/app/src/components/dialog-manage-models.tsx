@@ -9,6 +9,7 @@ import { popularProviders } from "@/hooks/use-providers"
 import { useLanguage } from "@/context/language"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { DialogSelectProvider } from "./dialog-select-provider"
+import { HIDE_PROVIDER_UI } from "@/branding"
 
 export const DialogManageModels: Component = () => {
   const local = useLocal()
@@ -33,9 +34,12 @@ export const DialogManageModels: Component = () => {
       title={language.t("dialog.model.manage")}
       description={language.t("dialog.model.manage.description")}
       action={
-        <Button class="h-7 -my-1 text-14-medium" icon="plus-small" tabIndex={-1} onClick={handleConnectProvider}>
-          {language.t("command.provider.connect")}
-        </Button>
+        // PunkcodeAI（M5）：HIDE_PROVIDER_UI 时不显示 "添加 provider" 按钮。
+        HIDE_PROVIDER_UI ? null : (
+          <Button class="h-7 -my-1 text-14-medium" icon="plus-small" tabIndex={-1} onClick={handleConnectProvider}>
+            {language.t("command.provider.connect")}
+          </Button>
+        )
       }
     >
       <List

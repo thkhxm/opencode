@@ -298,6 +298,7 @@ function HomeProjectColumn(props: {
 }) {
   const servers = useServers()
   const layout = useLayout()
+  const navigate = useNavigate()
   const projects = createMemo(() => layout.projects.list())
   return (
     <aside class="flex min-w-0 flex-col lg:pt-[52px] gap-4" aria-label={props.language.t("home.projects")}>
@@ -387,6 +388,15 @@ function HomeProjectColumn(props: {
         </For>
       </Show>
       <div class="flex min-w-0 flex-col gap-1">
+        {/* PunkcodeAI（M5）：账户入口 */}
+        <button
+          type="button"
+          class={`${HOME_PROJECT_NAV_ROW} text-v2-text-text-faint [&>[data-slot=icon-svg]]:text-v2-icon-icon-muted`}
+          onClick={() => navigate("/account")}
+        >
+          <IconV2 name="settings-gear" size="small" />
+          <span>{props.language.t("account.title")}</span>
+        </button>
         <button
           type="button"
           class={`${HOME_PROJECT_NAV_ROW} text-v2-text-text-faint [&>[data-slot=icon-svg]]:text-v2-icon-icon-muted`}

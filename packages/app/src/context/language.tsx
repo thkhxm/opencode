@@ -162,8 +162,15 @@ const localeMatchers: Array<{ locale: Locale; match: (language: string) => boole
   { locale: "tr", match: (language) => language.startsWith("tr") },
 ]
 
+/**
+ * PunkcodeAI 默认中文（M5）：当浏览器 / Electron renderer 不提供 navigator.language 信息时，
+ * fallback 回 "zh" 而非 "en"。
+ *
+ * 这样在 Electron 首次启动（早期阶段 navigator 可能尚未就绪）或测试环境下也能命中中文。
+ * 用户显式选择其他语言后会写入 localStorage，下次启动以 storage 为准（见 `readStoredLocale`）。
+ */
 function detectLocale(): Locale {
-  if (typeof navigator !== "object") return "en"
+  if (typeof navigator !== "object") return "zh"
 
   const languages = navigator.languages?.length ? navigator.languages : [navigator.language]
   for (const language of languages) {
@@ -173,7 +180,7 @@ function detectLocale(): Locale {
     if (match) return match.locale
   }
 
-  return "en"
+  return "zh"
 }
 
 export function normalizeLocale(value: string): Locale {

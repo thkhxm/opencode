@@ -12,6 +12,7 @@ import { List } from "@opencode-ai/ui/list"
 import { Tooltip } from "@opencode-ai/ui/tooltip"
 import { ModelTooltip } from "./model-tooltip"
 import { useLanguage } from "@/context/language"
+import { HIDE_PROVIDER_UI } from "@/branding"
 
 const isFree = (provider: string, cost: { input: number } | undefined) =>
   provider === "opencode" && (!cost || cost.input === 0)
@@ -166,28 +167,31 @@ export function ModelSelectorPopover(props: {
             onSelect={() => close("select")}
             class="p-1"
             action={
-              <div class="flex items-center gap-1">
-                <Tooltip placement="top" value={language.t("command.provider.connect")}>
-                  <IconButton
-                    icon="plus-small"
-                    variant="ghost"
-                    iconSize="normal"
-                    class="size-6"
-                    aria-label={language.t("command.provider.connect")}
-                    onClick={handleConnectProvider}
-                  />
-                </Tooltip>
-                <Tooltip placement="top" value={language.t("dialog.model.manage")}>
-                  <IconButton
-                    icon="sliders"
-                    variant="ghost"
-                    iconSize="normal"
-                    class="size-6"
-                    aria-label={language.t("dialog.model.manage")}
-                    onClick={handleManage}
-                  />
-                </Tooltip>
-              </div>
+              // PunkcodeAI（M5）：HIDE_PROVIDER_UI 时 "添加 provider / 管理模型" 按钮全部不渲染。
+              HIDE_PROVIDER_UI ? null : (
+                <div class="flex items-center gap-1">
+                  <Tooltip placement="top" value={language.t("command.provider.connect")}>
+                    <IconButton
+                      icon="plus-small"
+                      variant="ghost"
+                      iconSize="normal"
+                      class="size-6"
+                      aria-label={language.t("command.provider.connect")}
+                      onClick={handleConnectProvider}
+                    />
+                  </Tooltip>
+                  <Tooltip placement="top" value={language.t("dialog.model.manage")}>
+                    <IconButton
+                      icon="sliders"
+                      variant="ghost"
+                      iconSize="normal"
+                      class="size-6"
+                      aria-label={language.t("dialog.model.manage")}
+                      onClick={handleManage}
+                    />
+                  </Tooltip>
+                </div>
+              )
             }
           />
         </Kobalte.Content>
@@ -215,16 +219,22 @@ export const DialogSelectModel: Component<{ provider?: string; model?: ModelStat
   return (
     <Dialog
       title={language.t("dialog.model.select.title")}
+      // PunkcodeAI（M5）：HIDE_PROVIDER_UI 时不显示 "添加 provider" 按钮。
       action={
-        <Button class="h-7 -my-1 text-14-medium" icon="plus-small" tabIndex={-1} onClick={provider}>
-          {language.t("command.provider.connect")}
-        </Button>
+        HIDE_PROVIDER_UI ? null : (
+          <Button class="h-7 -my-1 text-14-medium" icon="plus-small" tabIndex={-1} onClick={provider}>
+            {language.t("command.provider.connect")}
+          </Button>
+        )
       }
     >
       <ModelList provider={props.provider} model={props.model} onSelect={() => dialog.close()} />
-      <Button variant="ghost" class="ml-3 mt-5 mb-6 text-text-base self-start" onClick={manage}>
-        {language.t("dialog.model.manage")}
-      </Button>
+      {/* PunkcodeAI（M5）：HIDE_PROVIDER_UI 时不显示 "管理模型" 按钮 */}
+      <Show when={!HIDE_PROVIDER_UI}>
+        <Button variant="ghost" class="ml-3 mt-5 mb-6 text-text-base self-start" onClick={manage}>
+          {language.t("dialog.model.manage")}
+        </Button>
+      </Show>
     </Dialog>
   )
 }

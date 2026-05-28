@@ -10,6 +10,7 @@ import { useLocal } from "@/context/local"
 import { popularProviders, useProviders } from "@/hooks/use-providers"
 import { ModelTooltip } from "./model-tooltip"
 import { useLanguage } from "@/context/language"
+import { HIDE_PROVIDER_UI } from "@/branding"
 
 type ModelState = ReturnType<typeof useLocal>["model"]
 
@@ -84,6 +85,8 @@ export const DialogSelectModelUnpaid: Component<{ model?: ModelState }> = (props
           )}
         </List>
       </div>
+      {/* PunkcodeAI（M5）：HIDE_PROVIDER_UI 时 "添加更多 provider" 整段不渲染 */}
+      <Show when={!HIDE_PROVIDER_UI}>
       <div class="px-1.5 pb-1.5">
         <div class="w-full rounded-sm border border-border-weak-base bg-surface-raised-base">
           <div class="w-full flex flex-col items-start gap-4 px-1.5 pt-4 pb-4">
@@ -140,6 +143,7 @@ export const DialogSelectModelUnpaid: Component<{ model?: ModelState }> = (props
           </div>
         </div>
       </div>
+      </Show>
     </Dialog>
   )
 }

@@ -25,3 +25,19 @@ export const DEFAULT_API_BASE_URL: string =
 
 /** GitHub Issues 反馈链接（保留 opencode，因为底层框架来自 opencode；用户感知不到这个 URL） */
 export const ISSUE_TRACKER_URL = "https://github.com/thkhxm/opencode/issues"
+
+/**
+ * 是否隐藏所有 provider / API key / OAuth 配置入口。
+ *
+ * PunkcodeAI 桌面端用户通过 sub2api 的账号统一计费、统一管理模型，
+ * 不需要在 UI 里看到"添加 OpenAI Key / 添加 Anthropic OAuth / 自定义 provider"等入口。
+ *
+ * 这个开关同时关闭：
+ *   - 命令面板的 "connect provider"
+ *   - Layout 侧栏的 "getting started → connect provider"
+ *   - Settings 弹窗的 Providers / Models 两个 tab
+ *   - 模型选择弹窗 / 弹层的"添加 provider / 管理模型"按钮
+ *
+ * 模型下拉本身保留，让用户能切换模型。M6 接 `/cli/llm` 后下拉会显示真实模型列表。
+ */
+export const HIDE_PROVIDER_UI = true

@@ -308,9 +308,17 @@ render(() => {
     const current = await platform.storage?.("opencode.global.dat").getItem("language")
     const legacy = current ? undefined : await platform.storage?.().getItem("language.v1")
     const raw = current ?? legacy
-    if (!raw) return
+    if (!raw) {
+      // PunkcodeAI（M5）：用户首次启动还没选过语言时，默认中文——这里要 *预加载* zh 字典，
+      // 否则首屏会闪一下英文再切到中文。
+      await loadLocaleDict("zh")
+      return "zh" satisfies Locale
+    }
     const locale = raw.match(/"locale"\s*:\s*"([^"]+)"/)?.[1]
-    if (!locale) return
+    if (!locale) {
+      await loadLocaleDict("zh")
+      return "zh" satisfies Locale
+    }
     const next = normalizeLocale(locale)
     if (next !== "en") await loadLocaleDict(next)
     return next satisfies Locale

@@ -9,7 +9,7 @@ import { Font } from "@opencode-ai/ui/font"
 import { Splash } from "@opencode-ai/ui/logo"
 import { ThemeProvider } from "@opencode-ai/ui/theme/context"
 import { MetaProvider } from "@solidjs/meta"
-import { type BaseRouterProps, Navigate, Route, Router } from "@solidjs/router"
+import { type BaseRouterProps, Navigate, Route, Router, useLocation } from "@solidjs/router"
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query"
 import { Effect } from "effect"
 import {
@@ -48,9 +48,19 @@ import Layout from "@/pages/layout"
 import { ErrorPage } from "./pages/error"
 import { useCheckServerHealth } from "./utils/server-health"
 import { ServersProvider } from "./context/servers"
+import { AuthGate } from "@/components/auth-gate"
+import { ensureBootstrap } from "@/stores/auth"
+
+// PunkcodeAI（M5）：模块加载时启动 auth bootstrap——会从 localStorage 读 refresh_token 并自动续期。
+// `ensureBootstrap` 是幂等的，多次调用不会重复执行；
+// AuthGate 会响应式地观察 store 变化，bootstrap 完成后已登录用户会从 /login 自动回到原路由。
+void ensureBootstrap()
 
 const HomeRoute = lazy(() => import("@/pages/home"))
 const Session = lazy(() => import("@/pages/session"))
+const LoginRoute = lazy(() => import("@/pages/login"))
+const RegisterRoute = lazy(() => import("@/pages/register"))
+const AccountRoute = lazy(() => import("@/pages/account"))
 
 const SessionRoute = Object.assign(
   () => (
@@ -142,14 +152,35 @@ function SessionProviders(props: ParentProps) {
   )
 }
 
+/**
+ * PunkcodeAI 登录 / 注册路由的路径前缀。
+ *
+ * 这些路径不渲染 `AppShellProviders`（Layout 侧边栏、设置弹窗等都依赖 Server / 项目上下文，
+ * 未登录用户不应触碰这些 Provider）。
+ */
+const AUTH_PATH_PREFIXES = ["/login", "/register"] as const
+
+function isAuthPath(pathname: string) {
+  return AUTH_PATH_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`))
+}
+
 function RouterRoot(props: ParentProps<{ appChildren?: JSX.Element }>) {
+  const location = useLocation()
   return (
-    <AppShellProviders>
-      {/*<Suspense fallback={<Loading />}>*/}
-      {props.appChildren}
-      {props.children}
-      {/*</Suspense>*/}
-    </AppShellProviders>
+    <Show
+      when={!isAuthPath(location.pathname)}
+      fallback={
+        // 登录 / 注册页：跳过 AppShellProviders（避免触发未登录态下不该跑的 Provider 初始化）。
+        <>{props.children}</>
+      }
+    >
+      <AppShellProviders>
+        {/*<Suspense fallback={<Loading />}>*/}
+        {props.appChildren}
+        {props.children}
+        {/*</Suspense>*/}
+      </AppShellProviders>
+    </Show>
   )
 }
 
@@ -326,8 +357,37 @@ export function AppInterface(props: {
                     component={props.router ?? Router}
                     root={(routerProps) => <RouterRoot appChildren={props.children}>{routerProps.children}</RouterRoot>}
                   >
-                    <Route path="/" component={HomeRoute} />
-                    <Route path="/:dir" component={DirectoryLayout}>
+                    {/*
+                      PunkcodeAI 鉴权页（M5）：必须在 AuthGate 之外，未登录也要能到达。
+                      RouterRoot 已根据路径关闭 AppShellProviders / Layout。
+                    */}
+                    <Route path="/login" component={LoginRoute} />
+                    <Route path="/register" component={RegisterRoute} />
+                    {/* 已登录路由：用 AuthGate 拦截未登录访问，自动重定向到 /login */}
+                    <Route
+                      path="/"
+                      component={() => (
+                        <AuthGate>
+                          <HomeRoute />
+                        </AuthGate>
+                      )}
+                    />
+                    <Route
+                      path="/account"
+                      component={() => (
+                        <AuthGate>
+                          <AccountRoute />
+                        </AuthGate>
+                      )}
+                    />
+                    <Route
+                      path="/:dir"
+                      component={(routeProps) => (
+                        <AuthGate>
+                          <DirectoryLayout>{routeProps.children}</DirectoryLayout>
+                        </AuthGate>
+                      )}
+                    >
                       <Route path="/" component={() => <Navigate href="session" />} />
                       <Route path="/session/:id?" component={SessionRoute} />
                     </Route>

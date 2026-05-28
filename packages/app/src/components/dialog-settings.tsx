@@ -1,4 +1,4 @@
-import { Component } from "solid-js"
+import { Component, Show } from "solid-js"
 import { Dialog } from "@opencode-ai/ui/dialog"
 import { Tabs } from "@opencode-ai/ui/tabs"
 import { Icon } from "@opencode-ai/ui/icon"
@@ -8,6 +8,7 @@ import { SettingsGeneral } from "./settings-general"
 import { SettingsKeybinds } from "./settings-keybinds"
 import { SettingsProviders } from "./settings-providers"
 import { SettingsModels } from "./settings-models"
+import { HIDE_PROVIDER_UI } from "@/branding"
 
 export const DialogSettings: Component = () => {
   const language = useLanguage()
@@ -34,19 +35,22 @@ export const DialogSettings: Component = () => {
                   </div>
                 </div>
 
-                <div class="flex flex-col gap-1.5">
-                  <Tabs.SectionTitle>{language.t("settings.section.server")}</Tabs.SectionTitle>
-                  <div class="flex flex-col gap-1.5 w-full">
-                    <Tabs.Trigger value="providers">
-                      <Icon name="providers" />
-                      {language.t("settings.providers.title")}
-                    </Tabs.Trigger>
-                    <Tabs.Trigger value="models">
-                      <Icon name="models" />
-                      {language.t("settings.models.title")}
-                    </Tabs.Trigger>
+                {/* PunkcodeAI（M5）：HIDE_PROVIDER_UI 时整个 "Server / Providers / Models" 区不出现 */}
+                <Show when={!HIDE_PROVIDER_UI}>
+                  <div class="flex flex-col gap-1.5">
+                    <Tabs.SectionTitle>{language.t("settings.section.server")}</Tabs.SectionTitle>
+                    <div class="flex flex-col gap-1.5 w-full">
+                      <Tabs.Trigger value="providers">
+                        <Icon name="providers" />
+                        {language.t("settings.providers.title")}
+                      </Tabs.Trigger>
+                      <Tabs.Trigger value="models">
+                        <Icon name="models" />
+                        {language.t("settings.models.title")}
+                      </Tabs.Trigger>
+                    </div>
                   </div>
-                </div>
+                </Show>
               </div>
             </div>
             <div class="flex flex-col gap-1 pl-1 py-1 text-12-medium text-text-weak">
@@ -61,12 +65,14 @@ export const DialogSettings: Component = () => {
         <Tabs.Content value="shortcuts" class="no-scrollbar">
           <SettingsKeybinds />
         </Tabs.Content>
-        <Tabs.Content value="providers" class="no-scrollbar">
-          <SettingsProviders />
-        </Tabs.Content>
-        <Tabs.Content value="models" class="no-scrollbar">
-          <SettingsModels />
-        </Tabs.Content>
+        <Show when={!HIDE_PROVIDER_UI}>
+          <Tabs.Content value="providers" class="no-scrollbar">
+            <SettingsProviders />
+          </Tabs.Content>
+          <Tabs.Content value="models" class="no-scrollbar">
+            <SettingsModels />
+          </Tabs.Content>
+        </Show>
       </Tabs>
     </Dialog>
   )

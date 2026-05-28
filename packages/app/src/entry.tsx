@@ -13,14 +13,16 @@ import { ServerConnection } from "./context/server"
 
 const DEFAULT_SERVER_URL_KEY = "opencode.settings.dat:defaultServerUrl"
 
+// PunkcodeAI 默认中文（M5）：navigator 不可用或非中文环境下默认 "zh"。
+// 这里仅用于"取根节点失败时的错误文案"，与 LanguageProvider.detectLocale 行为对齐。
 const getLocale = () => {
-  if (typeof navigator !== "object") return "en" as const
+  if (typeof navigator !== "object") return "zh" as const
   const languages = navigator.languages?.length ? navigator.languages : [navigator.language]
   for (const language of languages) {
     if (!language) continue
-    if (language.toLowerCase().startsWith("zh")) return "zh" as const
+    if (language.toLowerCase().startsWith("en")) return "en" as const
   }
-  return "en" as const
+  return "zh" as const
 }
 
 const getRootNotFoundError = () => {
