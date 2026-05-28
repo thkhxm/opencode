@@ -15,7 +15,11 @@ const dim = (value: string) => UI.Style.TEXT_DIM + value + UI.Style.TEXT_NORMAL
 
 const activeSuffix = (isActive: boolean) => (isActive ? dim(" (active)") : "")
 
-export const defaultConsoleUrl = "https://console.opencode.ai"
+// PunkcodeAI 桌面端集成：默认指向 punkcodeai 后台；可用 PUNKCODE_API_BASE_URL 覆盖。
+// 注意 cli 包不走 vite，直接用 process.env 即可。dev 调试可设：
+//   PUNKCODE_API_BASE_URL=http://localhost:38080 opencode console login
+export const defaultConsoleUrl =
+  process.env["PUNKCODE_API_BASE_URL"] ?? "https://punkcodeai.myverse.site"
 
 export const formatAccountLabel = (account: { email: string; url: string }, isActive: boolean) =>
   `${account.email} ${dim(account.url)}${activeSuffix(isActive)}`

@@ -4,8 +4,13 @@ import stripAnsi from "strip-ansi"
 import { defaultConsoleUrl, formatAccountLabel, formatOrgLine } from "../../src/cli/cmd/account"
 
 describe("console account display", () => {
-  test("uses console.opencode.ai as the default login URL", () => {
-    expect(defaultConsoleUrl).toBe("https://console.opencode.ai")
+  test("defaults the login URL to punkcodeai.myverse.site when env var unset", () => {
+    // PunkcodeAI 集成：默认 console URL 改为 punkcodeai 后台；
+    // dev 通过 PUNKCODE_API_BASE_URL=http://localhost:38080 覆盖。
+    // 注意：单测里直接断言 defaultConsoleUrl，若运行测试时已设置 PUNKCODE_API_BASE_URL，
+    // 这里允许命中环境变量值，否则必须落到默认 punkcode 域名。
+    const expected = process.env["PUNKCODE_API_BASE_URL"] ?? "https://punkcodeai.myverse.site"
+    expect(defaultConsoleUrl).toBe(expected)
   })
 
   test("includes the account url in account labels", () => {

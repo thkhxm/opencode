@@ -11,10 +11,12 @@ import {
 import { withTransientReadRetry } from "@/util/effect-http-client"
 import { AccountRepo, type AccountRow } from "./repo"
 import { normalizeServerUrl } from "./url"
+import { makeCredentials } from "./credentials"
 import {
   type AccountError,
   AccessToken,
   AccountID,
+  CredentialsError,
   DeviceCode,
   Info,
   RefreshToken,
@@ -41,6 +43,7 @@ export {
   AccountTransportError,
   AccessToken,
   RefreshToken,
+  CredentialsError,
   DeviceCode,
   UserCode,
   Info,
@@ -178,6 +181,23 @@ export interface Interface {
   readonly token: (accountID: AccountID) => Effect.Effect<Option.Option<AccessToken>, AccountError>
   readonly login: (url: string) => Effect.Effect<Login, AccountError>
   readonly poll: (input: Login) => Effect.Effect<PollResult, AccountError>
+  // ============================================================
+  // credentials flow（邮箱 + 密码登录到 sub2api / PunkcodeAI）
+  // ============================================================
+  // 与 device flow 平行，桌面端默认走这条；CLI 端保留 device flow。
+  readonly register: (
+    server: string,
+    input: { email: string; password: string; nickname: string },
+  ) => Effect.Effect<PollSuccess, AccountError | CredentialsError>
+  readonly loginCredentials: (
+    server: string,
+    input: { email: string; password: string },
+  ) => Effect.Effect<PollSuccess, AccountError | CredentialsError>
+  readonly refreshCredentials: (
+    server: string,
+    accountID: AccountID,
+    refreshToken: RefreshToken,
+  ) => Effect.Effect<void, AccountError | CredentialsError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Account") {}
@@ -438,6 +458,9 @@ export const layer: Layer.Layer<Service, never, AccountRepo.Service | HttpClient
       return new PollSuccess({ email: account.email })
     })
 
+    // credentials flow（sub2api / PunkcodeAI 桌面端登录）
+    const credentials = makeCredentials({ http, repo })
+
     return Service.of({
       active: repo.active,
       activeOrg,
@@ -450,6 +473,9 @@ export const layer: Layer.Layer<Service, never, AccountRepo.Service | HttpClient
       token,
       login,
       poll,
+      register: credentials.register,
+      loginCredentials: credentials.login,
+      refreshCredentials: credentials.refresh,
     })
   }),
 )
