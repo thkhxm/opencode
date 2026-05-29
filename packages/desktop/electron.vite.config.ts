@@ -6,11 +6,19 @@ import * as fs from "node:fs/promises"
 const OPENCODE_SERVER_DIST = "../opencode/dist/node"
 
 const channel = (() => {
-  const raw = process.env.OPENCODE_CHANNEL
+  // PunkcodeAI 优先读 PUNKCODE_CHANNEL，兼容旧名 OPENCODE_CHANNEL
+  const raw = process.env.PUNKCODE_CHANNEL ?? process.env.OPENCODE_CHANNEL
   if (raw === "dev" || raw === "beta" || raw === "prod") return raw
-  if (process.env.OPENCODE_CHANNEL === "latest") return "prod"
+  if (raw === "latest") return "prod"
   return "dev"
 })()
+
+// PunkcodeAI 后端 API base URL：dev 默认指向本地 sub2api (38080)，prod 由
+// .env.production 注入 punkcodeai.myverse.site。代码引用 branding.ts -> DEFAULT_API_BASE_URL。
+const punkcodeApiBaseUrl =
+  process.env.PUNKCODE_API_BASE_URL ?? (channel === "dev" ? "http://localhost:38080" : "https://punkcodeai.myverse.site")
+
+const punkcodeUpdateFeedUrl = process.env.PUNKCODE_UPDATE_FEED_URL ?? "https://punkcodeai.myverse.site/updates"
 
 const nodePtyPkg = `@lydell/node-pty-${process.platform}-${process.arch}`
 
@@ -35,6 +43,8 @@ export default defineConfig({
   main: {
     define: {
       "import.meta.env.OPENCODE_CHANNEL": JSON.stringify(channel),
+      "import.meta.env.PUNKCODE_API_BASE_URL": JSON.stringify(punkcodeApiBaseUrl),
+      "import.meta.env.PUNKCODE_UPDATE_FEED_URL": JSON.stringify(punkcodeUpdateFeedUrl),
     },
     build: {
       rollupOptions: {
@@ -80,6 +90,11 @@ export default defineConfig({
     },
   },
   renderer: {
+    define: {
+      // renderer 端 branding.ts -> DEFAULT_API_BASE_URL 读这个；dev 指向本地 sub2api。
+      "import.meta.env.PUNKCODE_API_BASE_URL": JSON.stringify(punkcodeApiBaseUrl),
+      "import.meta.env.PUNKCODE_UPDATE_FEED_URL": JSON.stringify(punkcodeUpdateFeedUrl),
+    },
     plugins: [appPlugin, sentry],
     publicDir: "../../../app/public",
     root: "src/renderer",

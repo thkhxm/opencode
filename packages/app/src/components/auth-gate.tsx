@@ -36,7 +36,9 @@ export function AuthGate(props: { children?: JSX.Element }): JSX.Element {
       when={auth.bootstrapping()}
       fallback={<Show when={auth.isLoggedIn()}>{props.children}</Show>}
     >
-      <div class="h-dvh w-screen flex flex-col items-center justify-center bg-background-base gap-4">
+      <div class="relative h-dvh w-screen flex flex-col items-center justify-center bg-background-base gap-4">
+        {/* splash 期间无 Titlebar，补顶部可拖动区保持与 login 一致 */}
+        <div data-tauri-drag-region class="absolute top-0 left-0 right-0 h-10" />
         <Splash class="w-16 h-20 opacity-60 animate-pulse" />
         <p class="text-12-regular text-text-weak">{language.t("bootstrap.loading")}</p>
       </div>

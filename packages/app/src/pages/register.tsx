@@ -56,7 +56,9 @@ const Register: Component = () => {
   }
 
   return (
-    <div class="flex-1 h-screen w-screen min-h-0 flex flex-col items-center justify-center bg-background-base font-sans">
+    <div class="relative flex-1 h-screen w-screen min-h-0 flex flex-col items-center justify-center bg-background-base font-sans">
+      {/* 同 login.tsx：注册页无 Titlebar，补顶部可拖动区。 */}
+      <div data-tauri-drag-region class="absolute top-0 left-0 right-0 h-10" />
       <div class="w-full max-w-sm flex flex-col items-center justify-center gap-6 px-6">
         <Logo class="w-40 opacity-60 shrink-0" />
         <div class="flex flex-col items-center gap-1 text-center">
