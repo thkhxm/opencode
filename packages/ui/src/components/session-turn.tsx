@@ -4,13 +4,13 @@ import {
   Message as MessageType,
   Part as PartType,
 } from "@opencode-ai/sdk/v2/client"
-import type { SessionStatus } from "@opencode-ai/sdk/v2"
+import type { FileContent, SessionStatus } from "@opencode-ai/sdk/v2"
 import { useData } from "../context"
 import { useFileComponent } from "../context/file"
 
 import { Binary } from "@opencode-ai/core/util/binary"
 import { getDirectory, getFilename } from "@opencode-ai/core/util/path"
-import { createEffect, createMemo, createSignal, For, on, ParentProps, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, For, Match, on, ParentProps, Show, Switch } from "solid-js"
 import { createStore } from "solid-js/store"
 import { Dynamic } from "solid-js/web"
 import { AssistantParts, Message, MessageDivider, PART_MAPPING, type UserActions } from "./message-part"
@@ -18,12 +18,17 @@ import { Card } from "./card"
 import { Accordion } from "./accordion"
 import { StickyAccordionHeader } from "./sticky-accordion-header"
 import { DiffChanges } from "./diff-changes"
+import { FileMedia } from "./file-media"
+import { ImagePreview } from "./image-preview"
+import { Tooltip } from "./tooltip"
 import { Icon } from "./icon"
 import { TextShimmer } from "./text-shimmer"
 import { SessionRetry } from "./session-retry"
 import { TextReveal } from "./text-reveal"
 import { createAutoScroll } from "../hooks"
+import { useDialog } from "../context/dialog"
 import { useI18n } from "../context/i18n"
+import { mediaKindFromPath } from "../pierre/media"
 import { normalize } from "./session-diff"
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -161,6 +166,17 @@ export function SessionTurn(
     active?: boolean
     status?: SessionStatus
     onUserInteracted?: () => void
+    /**
+     * 读取工作目录里某个文件的内容（图片返 base64+mime），用于「Changed 文件」摘要里
+     * 图片文件的缩略图渲染。不传则图片文件回退到原来的（空白）diff 渲染。
+     */
+    readFile?: (path: string) => Promise<FileContent | undefined>
+    /**
+     * 用「系统默认应用 / 下载」打开某个文件的原图（主要给图片等媒体文件用）。
+     * desktop 一般接 `platform.openPath`，web 可走 `<a download>` 兜底。
+     * 不传则不显示「打开原图」按钮（缩略图与放大预览仍可用）。
+     */
+    onOpenFile?: (path: string) => void
     classes?: {
       root?: string
       content?: string
@@ -170,6 +186,7 @@ export function SessionTurn(
 ) {
   const data = useData()
   const i18n = useI18n()
+  const dialog = useDialog()
   const fileComponent = useFileComponent()
 
   const emptyMessages: MessageType[] = []
@@ -462,6 +479,12 @@ export function SessionTurn(
                           const view = normalize(diff)
                           const active = createMemo(() => expanded().includes(diff.file))
                           const [shown, setShown] = createSignal(false)
+                          // 光栅图片 / 音频文件 diff 为空，走 FileMedia 缩略图（点击放大 ImagePreview）。
+                          const mediaKind = createMemo(() => mediaKindFromPath(diff.file))
+                          const isMedia = createMemo(() => {
+                            const k = mediaKind()
+                            return k === "image" || k === "audio"
+                          })
 
                           createEffect(
                             on(
@@ -495,6 +518,25 @@ export function SessionTurn(
                                       <span data-slot="session-turn-diff-filename">{getFilename(diff.file)}</span>
                                     </span>
                                     <div data-slot="session-turn-diff-meta">
+                                      <Show when={props.onOpenFile && isMedia()}>
+                                        <Tooltip
+                                          value={i18n.t("ui.sessionReview.openOriginal")}
+                                          placement="top"
+                                          gutter={4}
+                                        >
+                                          <button
+                                            data-slot="session-turn-diff-open"
+                                            type="button"
+                                            aria-label={i18n.t("ui.sessionReview.openOriginal")}
+                                            onClick={(event) => {
+                                              event.stopPropagation()
+                                              props.onOpenFile?.(diff.file)
+                                            }}
+                                          >
+                                            <Icon name="download" size="small" />
+                                          </button>
+                                        </Tooltip>
+                                      </Show>
                                       <span data-slot="session-turn-diff-changes">
                                         <DiffChanges changes={diff} />
                                       </span>
@@ -507,9 +549,35 @@ export function SessionTurn(
                               </StickyAccordionHeader>
                               <Accordion.Content>
                                 <Show when={shown()}>
-                                  <div data-slot="session-turn-diff-view" data-scrollable>
-                                    <Dynamic component={fileComponent} mode="diff" fileDiff={view.fileDiff} />
-                                  </div>
+                                  <Switch>
+                                    <Match when={isMedia()}>
+                                      <div data-slot="session-turn-diff-view">
+                                        <FileMedia
+                                          media={{
+                                            mode: "auto",
+                                            path: diff.file,
+                                            deleted: diff.status === "deleted",
+                                            readFile: diff.status === "deleted" ? undefined : props.readFile,
+                                            imageClass: "max-h-[300px]",
+                                            onActivate: (src) =>
+                                              dialog.show(() => <ImagePreview src={src} alt={diff.file} />),
+                                          }}
+                                          fallback={() => (
+                                            <div class="flex min-h-40 items-center justify-center px-6 py-4 text-center text-text-weak">
+                                              {i18n.t("ui.fileMedia.state.unavailable", {
+                                                kind: i18n.t("ui.fileMedia.kind.image"),
+                                              })}
+                                            </div>
+                                          )}
+                                        />
+                                      </div>
+                                    </Match>
+                                    <Match when={true}>
+                                      <div data-slot="session-turn-diff-view" data-scrollable>
+                                        <Dynamic component={fileComponent} mode="diff" fileDiff={view.fileDiff} />
+                                      </div>
+                                    </Match>
+                                  </Switch>
                                 </Show>
                               </Accordion.Content>
                             </Accordion.Item>

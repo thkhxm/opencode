@@ -4,9 +4,11 @@ import {
   createSignal,
   For,
   Index,
+  Match,
   on,
   onCleanup,
   Show,
+  Switch,
   mapArray,
   type Accessor,
   type JSX,
@@ -29,6 +31,9 @@ import {
 } from "@opencode-ai/ui/message-part"
 import { DiffChanges } from "@opencode-ai/ui/diff-changes"
 import { FileIcon } from "@opencode-ai/ui/file-icon"
+import { FileMedia } from "@opencode-ai/ui/file-media"
+import { ImagePreview } from "@opencode-ai/ui/image-preview"
+import { Tooltip } from "@opencode-ai/ui/tooltip"
 import { Icon } from "@opencode-ai/ui/icon"
 import { IconButton } from "@opencode-ai/ui/icon-button"
 import { DropdownMenu } from "@opencode-ai/ui/dropdown-menu"
@@ -43,6 +48,7 @@ import { TextReveal } from "@opencode-ai/ui/text-reveal"
 import { TextShimmer } from "@opencode-ai/ui/text-shimmer"
 import type {
   AssistantMessage,
+  FileContent,
   Message as MessageType,
   Part as PartType,
   ToolPart,
@@ -53,6 +59,7 @@ import { Binary } from "@opencode-ai/core/util/binary"
 import { getDirectory, getFilename } from "@opencode-ai/core/util/path"
 import { Popover as KobaltePopover } from "@kobalte/core/popover"
 import { normalize } from "@opencode-ai/ui/session-diff"
+import { mediaKindFromPath } from "@opencode-ai/ui/pierre/media"
 import { useFileComponent } from "@opencode-ai/ui/context/file"
 import { shouldMarkBoundaryGesture, normalizeWheelDelta } from "@/pages/session/message-gesture"
 import { SessionContextUsage } from "@/components/session-context-usage"
@@ -169,12 +176,22 @@ function TimelineThinkingRow(props: { reasoningHeading?: string; showReasoningSu
   )
 }
 
-function TimelineDiffSummaryRow(props: { diffs: SummaryDiff[] }) {
+function TimelineDiffSummaryRow(props: {
+  diffs: SummaryDiff[]
+  readFile?: (path: string) => Promise<FileContent | undefined>
+  onOpenFile?: (path: string) => void
+}) {
   const language = useLanguage()
   const maxFiles = 10
+  // 图片文件 ≤4 张时默认展开缩略图（用户无需手动点开看图）；>4 张默认折叠，避免一次性加载过多大图。
+  const defaultExpandedImages = props.diffs
+    .filter((d) => mediaKindFromPath(d.file) === "image")
+    .map((d) => d.file)
   const [state, setState] = createStore({
     showAll: false,
-    expanded: [] as string[],
+    expanded: (defaultExpandedImages.length > 0 && defaultExpandedImages.length <= 4
+      ? defaultExpandedImages
+      : []) as string[],
   })
   const showAll = () => state.showAll
   const expanded = () => state.expanded
@@ -209,6 +226,13 @@ function TimelineDiffSummaryRow(props: { diffs: SummaryDiff[] }) {
           <For each={visible()}>
             {(diff) => {
               const opened = createMemo(() => expanded().includes(diff.file))
+              // \u5149\u6805\u56FE\u7247 / \u97F3\u9891\u6587\u4EF6\u7684 diff additions/deletions \u90FD\u662F 0\uFF0C\u666E\u901A diff \u6E32\u67D3\u53EA\u4F1A\u51FA\u73B0\u7A7A\u767D\uFF1B
+              // \u8FD9\u7C7B\u6587\u4EF6\u6539\u8D70 FileMedia \u7F29\u7565\u56FE\u9884\u89C8\uFF08svg \u662F\u6587\u672C\uFF0C\u4ECD\u8D70 diff \u5206\u652F\u7531 File \u5185\u90E8\u987A\u5E26\u6E32\u67D3\u9884\u89C8\uFF09\u3002
+              const mediaKind = createMemo(() => mediaKindFromPath(diff.file))
+              const isMedia = createMemo(() => {
+                const k = mediaKind()
+                return k === "image" || k === "audio"
+              })
 
               return (
                 <Accordion.Item value={diff.file}>
@@ -222,6 +246,21 @@ function TimelineDiffSummaryRow(props: { diffs: SummaryDiff[] }) {
                           <span data-slot="session-turn-diff-filename">{getFilename(diff.file)}</span>
                         </span>
                         <div data-slot="session-turn-diff-meta">
+                          <Show when={props.onOpenFile && isMedia()}>
+                            <Tooltip value={language.t("ui.sessionReview.openOriginal")} placement="top" gutter={4}>
+                              <button
+                                data-slot="session-turn-diff-open"
+                                type="button"
+                                aria-label={language.t("ui.sessionReview.openOriginal")}
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  props.onOpenFile?.(diff.file)
+                                }}
+                              >
+                                <Icon name="download" size="small" />
+                              </button>
+                            </Tooltip>
+                          </Show>
                           <span data-slot="session-turn-diff-changes">
                             <DiffChanges changes={diff} />
                           </span>
@@ -234,7 +273,12 @@ function TimelineDiffSummaryRow(props: { diffs: SummaryDiff[] }) {
                   </StickyAccordionHeader>
                   <Accordion.Content>
                     <Show when={opened()}>
-                      <TimelineDiffView diff={diff} />
+                      <TimelineDiffView
+                        diff={diff}
+                        isMedia={isMedia()}
+                        readFile={props.readFile}
+                        onOpenFile={props.onOpenFile}
+                      />
                     </Show>
                   </Accordion.Content>
                 </Accordion.Item>
@@ -252,14 +296,44 @@ function TimelineDiffSummaryRow(props: { diffs: SummaryDiff[] }) {
   )
 }
 
-function TimelineDiffView(props: { diff: SummaryDiff }) {
+function TimelineDiffView(props: {
+  diff: SummaryDiff
+  isMedia?: boolean
+  readFile?: (path: string) => Promise<FileContent | undefined>
+  onOpenFile?: (path: string) => void
+}) {
   const fileComponent = useFileComponent()
-  const view = normalize(props.diff)
+  const dialog = useDialog()
+  const language = useLanguage()
 
   return (
-    <div data-slot="session-turn-diff-view" data-scrollable>
-      <Dynamic component={fileComponent} mode="diff" virtualize={false} fileDiff={view.fileDiff} />
-    </div>
+    <Switch>
+      {/* 图片 / 音频：走 FileMedia 缩略图（点击放大到 ImagePreview）。 */}
+      <Match when={props.isMedia}>
+        <div data-slot="session-turn-diff-view">
+          <FileMedia
+            media={{
+              mode: "auto",
+              path: props.diff.file,
+              deleted: props.diff.status === "deleted",
+              readFile: props.diff.status === "deleted" ? undefined : props.readFile,
+              imageClass: "max-h-[300px]",
+              onActivate: (src) => dialog.show(() => <ImagePreview src={src} alt={props.diff.file} />),
+            }}
+            fallback={() => (
+              <div class="flex min-h-40 items-center justify-center px-6 py-4 text-center text-text-weak">
+                {language.t("ui.fileMedia.state.unavailable", { kind: language.t("ui.fileMedia.kind.image") })}
+              </div>
+            )}
+          />
+        </div>
+      </Match>
+      <Match when={true}>
+        <div data-slot="session-turn-diff-view" data-scrollable>
+          <Dynamic component={fileComponent} mode="diff" virtualize={false} fileDiff={normalize(props.diff).fileDiff} />
+        </div>
+      </Match>
+    </Switch>
   )
 }
 
@@ -294,6 +368,53 @@ export function MessageTimeline(props: {
   const language = useLanguage()
   const { params, sessionKey } = useSessionKey()
   const platform = usePlatform()
+
+  // 读工作目录里的文件内容（图片返 base64+mime），给 diff 摘要里的图片缩略图用。
+  const readDiffFile = async (path: string) => {
+    return sdk.client.file
+      .read({ path })
+      .then((x) => x.data)
+      .catch((error) => {
+        console.debug("[session-turn] failed to read file", { path, error })
+        return undefined
+      })
+  }
+
+  // 「打开原图 / 下载原图」：desktop 走系统默认应用（platform.openPath），
+  // web 环境没有 openPath，则读文件内容拼 data-url 用 <a download> 触发浏览器下载。
+  const openDiffMedia = (path: string) => {
+    const join = (dir: string, rel: string) => {
+      const base = dir.replace(/[\\/]+$/, "")
+      const normalized = rel.replace(/^[\\/]+/, "")
+      const sep = base.includes("\\") && !base.includes("/") ? "\\" : "/"
+      return base ? `${base}${sep}${normalized}` : normalized
+    }
+
+    if (platform.openPath) {
+      const full = join(sdk.directory, path)
+      void platform.openPath(full).catch((error) => {
+        console.debug("[session-turn] failed to open media file", { path, full, error })
+      })
+      return
+    }
+
+    void sdk.client.file
+      .read({ path })
+      .then((res) => {
+        const data = res.data
+        if (!data || data.encoding !== "base64" || typeof data.content !== "string" || !data.mimeType) return
+        const href = `data:${data.mimeType};base64,${data.content}`
+        const a = document.createElement("a")
+        a.href = href
+        a.download = path.split(/[\\/]/).pop() ?? "download"
+        document.body.appendChild(a)
+        a.click()
+        a.remove()
+      })
+      .catch((error) => {
+        console.debug("[session-turn] failed to download media file", { path, error })
+      })
+  }
 
   let virtualizer: VirtualizerHandle | undefined
   const sessionID = createMemo(() => params.id)
@@ -1229,7 +1350,11 @@ export function MessageTimeline(props: {
         return (
           <TimelineRowFrame row={diffSummaryRow}>
             <div data-slot="session-turn-message-container" class="w-full px-4 md:px-5">
-              <TimelineDiffSummaryRow diffs={diffSummaryRow().diffs} />
+              <TimelineDiffSummaryRow
+                diffs={diffSummaryRow().diffs}
+                readFile={readDiffFile}
+                onOpenFile={openDiffMedia}
+              />
             </div>
           </TimelineRowFrame>
         )
