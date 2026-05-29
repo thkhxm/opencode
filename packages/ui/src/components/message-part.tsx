@@ -1578,6 +1578,62 @@ PART_MAPPING["text"] = function TextPartDisplay(props) {
   )
 }
 
+PART_MAPPING["file"] = function FilePartDisplay(props) {
+  const dialog = useDialog()
+  const i18n = useI18n()
+  const part = () => props.part as FilePart
+  const isImage = createMemo(() => kind(part()) === "image")
+  const name = createMemo(() => part().filename || i18n.t("ui.message.attachment.alt"))
+
+  const openPreview = () => {
+    dialog.show(() => <ImagePreview src={part().url} alt={name()} />)
+  }
+
+  return (
+    <div data-component="assistant-file-part" data-timeline-part-id={part().id} class="flex flex-col gap-1">
+      <Show
+        when={isImage()}
+        fallback={
+          <a
+            data-slot="assistant-file-part-file"
+            class="inline-flex w-fit items-center gap-2 rounded border border-border-weak-base px-3 py-2 text-14-medium text-text-strong no-underline"
+            href={part().url}
+            download={name()}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={name()}
+          >
+            <FileIcon node={{ path: name(), type: "file" }} />
+            <span data-slot="assistant-file-part-name">{name()}</span>
+            <Icon name="square-arrow-top-right" size="small" />
+          </a>
+        }
+      >
+        <button
+          type="button"
+          data-slot="assistant-file-part-image-button"
+          class="block cursor-pointer border-0 bg-transparent p-0"
+          onClick={openPreview}
+          aria-label={name()}
+        >
+          <img
+            data-slot="assistant-file-part-image"
+            class="max-h-[400px] max-w-full rounded border border-border-weak-base object-contain"
+            src={part().url}
+            alt={name()}
+            loading="lazy"
+          />
+        </button>
+        <Show when={part().filename}>
+          <span data-slot="assistant-file-part-caption" class="text-12-regular text-text-weak">
+            {name()}
+          </span>
+        </Show>
+      </Show>
+    </div>
+  )
+}
+
 PART_MAPPING["reasoning"] = function ReasoningPartDisplay(props) {
   const data = useData()
   const part = () => props.part as ReasoningPart
