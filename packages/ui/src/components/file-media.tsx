@@ -20,6 +20,10 @@ export type FileMediaOptions = {
   readFile?: (path: string) => Promise<FileContent | undefined>
   onLoad?: () => void
   onError?: (ctx: { kind: "image" | "audio" | "svg" }) => void
+  /** 覆盖图片 / svg 缩略图的尺寸约束 class，默认 `max-h-[60vh]`（用于在 review 列表里渲染较小的缩略图）。 */
+  imageClass?: string
+  /** 点击图片 / svg 缩略图时触发，参数是已加载好的 data-url（用于放大预览等场景）。 */
+  onActivate?: (src: string) => void
 }
 
 function mediaValue(cfg: FileMediaOptions, mode: "image" | "audio") {
@@ -127,22 +131,58 @@ export function FileMedia(props: { media?: FileMediaOptions; fallback: () => JSX
     return value && "mime" in value ? value.mime : undefined
   })
 
-  const svgSource = createMemo(() => {
+  // svg 既可能通过 `current` 内联提供，也可能只给 path + readFile（如 session review
+  // 里的工作目录文件），后者需要异步读取文件内容再渲染。
+  const svgRequest = createMemo(() => {
     const media = cfg()
     if (!media || kind() !== "svg") return
-    return svgTextFromValue(media.current as any)
+    if (media.current !== undefined) return
+    if (deleted()) return
+    if (!media.path || !media.readFile) return
+    return { key: `svg:${media.path}`, path: media.path, readFile: media.readFile, onError: media.onError }
+  })
+
+  const [svgLoaded] = createResource(svgRequest, async (input) => {
+    return input.readFile(input.path).then(
+      (result) => ({ key: input.key, content: result as unknown }),
+      () => {
+        input.onError?.({ kind: "svg" })
+        return { key: input.key, error: true as const }
+      },
+    )
+  })
+
+  const svgRemote = createMemo(() => {
+    const input = svgRequest()
+    const value = svgLoaded()
+    if (!input || !value || value.key !== input.key) return
+    return value
+  })
+
+  const svgValue = createMemo(() => {
+    const media = cfg()
+    if (!media || kind() !== "svg") return
+    if (media.current !== undefined) return media.current
+    const value = svgRemote()
+    if (value && "content" in value) return value.content
+    return undefined
+  })
+
+  const svgSource = createMemo(() => {
+    if (kind() !== "svg") return
+    return svgTextFromValue(svgValue() as any)
   })
   const svgSrc = createMemo(() => {
-    const media = cfg()
-    if (!media || kind() !== "svg") return
-    return dataUrlFromMediaValue(media.current as any, "svg")
+    if (kind() !== "svg") return
+    return dataUrlFromMediaValue(svgValue() as any, "svg")
   })
   const svgInvalid = createMemo(() => {
     const media = cfg()
     if (!media || kind() !== "svg") return
     if (svgSource() !== undefined) return
-    if (!hasMediaValue(media.current as any)) return
-    return [media.path, media.current] as const
+    const value = svgValue()
+    if (!hasMediaValue(value as any)) return
+    return [media.path, value] as const
   })
 
   createEffect(
@@ -202,13 +242,16 @@ export function FileMedia(props: { media?: FileMediaOptions; fallback: () => JSX
             const k = kind()
             if (k !== "image" && k !== "audio") return props.fallback()
             if (k === "image") {
+              const activate = cfg()?.onActivate
+              const imageClass = cfg()?.imageClass ?? "max-h-[60vh]"
               return (
                 <div class="flex justify-center bg-background-stronger px-6 py-4">
                   <img
                     src={value()}
                     alt={cfg()?.path}
-                    class="max-h-[60vh] max-w-full rounded border border-border-weak-base bg-background-base object-contain"
+                    class={`${imageClass} max-w-full rounded border border-border-weak-base bg-background-base object-contain${activate ? " cursor-zoom-in" : ""}`}
                     onLoad={onLoad}
+                    onClick={activate ? () => activate(value()) : undefined}
                   />
                 </div>
               )
@@ -232,16 +275,21 @@ export function FileMedia(props: { media?: FileMediaOptions; fallback: () => JSX
             <div class="flex flex-col gap-4 px-6 py-4">
               <Show when={svgSource() !== undefined}>{props.fallback()}</Show>
               <Show when={svgSrc()}>
-                {(value) => (
-                  <div class="flex justify-center">
-                    <img
-                      src={value()}
-                      alt={cfg()?.path}
-                      class="max-h-[60vh] max-w-full rounded border border-border-weak-base bg-background-base object-contain"
-                      onLoad={onLoad}
-                    />
-                  </div>
-                )}
+                {(value) => {
+                  const activate = cfg()?.onActivate
+                  const imageClass = cfg()?.imageClass ?? "max-h-[60vh]"
+                  return (
+                    <div class="flex justify-center">
+                      <img
+                        src={value()}
+                        alt={cfg()?.path}
+                        class={`${imageClass} max-w-full rounded border border-border-weak-base bg-background-base object-contain${activate ? " cursor-zoom-in" : ""}`}
+                        onLoad={onLoad}
+                        onClick={activate ? () => activate(value()) : undefined}
+                      />
+                    </div>
+                  )
+                }}
               </Show>
             </div>
           )

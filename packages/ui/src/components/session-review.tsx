@@ -4,11 +4,14 @@ import { DropdownMenu } from "./dropdown-menu"
 import { RadioGroup } from "./radio-group"
 import { DiffChanges } from "./diff-changes"
 import { FileIcon } from "./file-icon"
+import { FileMedia } from "./file-media"
 import { Icon } from "./icon"
 import { IconButton } from "./icon-button"
+import { ImagePreview } from "./image-preview"
 import { StickyAccordionHeader } from "./sticky-accordion-header"
 import { Tooltip } from "./tooltip"
 import { ScrollView } from "./scroll-view"
+import { useDialog } from "../context/dialog"
 import { useFileComponent } from "../context/file"
 import { useI18n } from "../context/i18n"
 import { getDirectory, getFilename } from "@opencode-ai/core/util/path"
@@ -115,6 +118,12 @@ export interface SessionReviewProps {
   actions?: JSX.Element
   diffs: RawReviewDiff[]
   onViewFile?: (file: string) => void
+  /**
+   * 用「系统默认应用 / 下载」打开某个文件的原图（主要给图片等媒体文件用）。
+   * desktop 环境一般接 `platform.openPath`，web 环境可走 `<a download>` 兜底。
+   * 不传则不显示「打开原图」按钮（缩略图与放大预览仍可用）。
+   */
+  onOpenFile?: (file: string) => void
   readFile?: (path: string) => Promise<FileContent | undefined>
   lineCommentMention?: LineCommentEditorProps["mention"]
 }
@@ -166,6 +175,7 @@ export const SessionReview = (props: SessionReviewProps) => {
   let focusToken = 0
   let frame: number | undefined
   const i18n = useI18n()
+  const dialog = useDialog()
   const fileComponent = useFileComponent()
   const anchors = new Map<string, HTMLElement>()
   const nodes = new Map<string, HTMLDivElement>()
@@ -272,6 +282,7 @@ export const SessionReview = (props: SessionReviewProps) => {
   }
 
   const openFileLabel = () => i18n.t("ui.sessionReview.openFile")
+  const openOriginalLabel = () => i18n.t("ui.sessionReview.openOriginal")
 
   const selectionSide = (range: SelectedLineRange) => range.endSide ?? range.side ?? "additions"
 
@@ -391,9 +402,17 @@ export const SessionReview = (props: SessionReviewProps) => {
                 <For each={items()}>
                   {(diff) => {
                     const file = diff.file
+                    const mediaKind = createMemo(() => mediaKindFromPath(file))
+                    // 光栅图片 / 音频走 FileMedia 缩略图渲染（绕开 diff）。
+                    // svg 是文本，仍走 diff 分支——File 组件内部的 FileMedia 会顺带渲染 svg 预览 + XML diff，两者都有用。
+                    const isMedia = createMemo(() => {
+                      const k = mediaKind()
+                      return k === "image" || k === "audio"
+                    })
 
-                    // binary files have empty diffs that we can't render
-                    const diffCanRender = () => diff.additions !== 0 || diff.deletions !== 0
+                    // binary files have empty diffs that we can't render；
+                    // 但媒体文件（图片等）即使 diff 为空也要可展开，以显示缩略图 + 下载原图。
+                    const diffCanRender = () => diff.additions !== 0 || diff.deletions !== 0 || isMedia()
 
                     const expanded = createMemo(() => open().includes(file))
                     const mounted = createMemo(() => expanded() && (!!store.visible[file] || pinned(file)))
@@ -405,7 +424,10 @@ export const SessionReview = (props: SessionReviewProps) => {
                     const beforeText = () => text(diff, "deletions")
                     const afterText = () => text(diff, "additions")
                     const changedLines = () => diff.additions + diff.deletions
-                    const mediaKind = createMemo(() => mediaKindFromPath(file))
+
+                    const openImagePreview = (src: string) => {
+                      dialog.show(() => <ImagePreview src={src} alt={file} />)
+                    }
 
                     const tooLarge = createMemo(() => {
                       if (!expanded()) return false
@@ -519,7 +541,7 @@ export const SessionReview = (props: SessionReviewProps) => {
                                     <span data-slot="session-review-directory">{`\u202A${getDirectory(file)}\u202C`}</span>
                                   </Show>
                                   <span data-slot="session-review-filename">{getFilename(file)}</span>
-                                  <Show when={props.onViewFile && diffCanRender()}>
+                                  <Show when={props.onViewFile && diffCanRender() && !isMedia()}>
                                     <Tooltip value={openFileLabel()} placement="top" gutter={4}>
                                       <button
                                         data-slot="session-review-view-button"
@@ -534,10 +556,37 @@ export const SessionReview = (props: SessionReviewProps) => {
                                       </button>
                                     </Tooltip>
                                   </Show>
+                                  <Show when={props.onOpenFile && isMedia()}>
+                                    <Tooltip value={openOriginalLabel()} placement="top" gutter={4}>
+                                      <button
+                                        data-slot="session-review-view-button"
+                                        type="button"
+                                        aria-label={openOriginalLabel()}
+                                        onClick={(e) => {
+                                          e.stopPropagation()
+                                          props.onOpenFile?.(file)
+                                        }}
+                                      >
+                                        <Icon name="download" size="small" />
+                                      </button>
+                                    </Tooltip>
+                                  </Show>
                                 </div>
                               </div>
                               <div data-slot="session-review-trigger-actions">
                                 <Switch>
+                                  <Match when={isMedia()}>
+                                    <span
+                                      data-slot="session-review-change"
+                                      data-type={isDeleted() ? "removed" : isAdded() ? "added" : "modified"}
+                                    >
+                                      {isDeleted()
+                                        ? i18n.t("ui.sessionReview.change.removed")
+                                        : isAdded()
+                                          ? i18n.t("ui.sessionReview.change.added")
+                                          : i18n.t("ui.sessionReview.change.modified")}
+                                    </span>
+                                  </Match>
                                   <Match when={isAdded()}>
                                     <div data-slot="session-review-change-group" data-type="added">
                                       <span data-slot="session-review-change" data-type="added">
@@ -549,11 +598,6 @@ export const SessionReview = (props: SessionReviewProps) => {
                                   <Match when={isDeleted()}>
                                     <span data-slot="session-review-change" data-type="removed">
                                       {i18n.t("ui.sessionReview.change.removed")}
-                                    </span>
-                                  </Match>
-                                  <Match when={!!mediaKind()}>
-                                    <span data-slot="session-review-change" data-type="modified">
-                                      {i18n.t("ui.sessionReview.change.modified")}
                                     </span>
                                   </Match>
                                   <Match when={true}>
@@ -580,6 +624,28 @@ export const SessionReview = (props: SessionReviewProps) => {
                           >
                             <Show when={expanded()}>
                               <Switch>
+                                <Match when={isMedia()}>
+                                  <div data-slot="session-review-media">
+                                    <FileMedia
+                                      media={{
+                                        mode: "auto",
+                                        path: file,
+                                        deleted: diff.status === "deleted",
+                                        readFile: diff.status === "deleted" ? undefined : props.readFile,
+                                        imageClass: "max-h-[300px]",
+                                        onActivate: openImagePreview,
+                                        onLoad: () => props.onDiffRendered?.(),
+                                      }}
+                                      fallback={() => (
+                                        <div class="flex min-h-40 items-center justify-center px-6 py-4 text-center text-text-weak">
+                                          {i18n.t("ui.fileMedia.state.unavailable", {
+                                            kind: i18n.t("ui.fileMedia.kind.image"),
+                                          })}
+                                        </div>
+                                      )}
+                                    />
+                                  </div>
+                                </Match>
                                 <Match when={!mounted() && !tooLarge()}>
                                   <div
                                     data-slot="session-review-diff-placeholder"

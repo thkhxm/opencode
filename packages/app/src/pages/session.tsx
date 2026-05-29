@@ -37,6 +37,7 @@ import { getSessionPrefetch, SESSION_PREFETCH_TTL } from "@/context/global-sync/
 import { useServerSync } from "@/context/server-sync"
 import { useLanguage } from "@/context/language"
 import { useLayout } from "@/context/layout"
+import { usePlatform } from "@/context/platform"
 import { usePrompt } from "@/context/prompt"
 import { useSDK } from "@/context/sdk"
 import { useSettings } from "@/context/settings"
@@ -189,6 +190,7 @@ export default function Page() {
   const queryClient = useQueryClient()
   const dialog = useDialog()
   const language = useLanguage()
+  const platform = usePlatform()
   const sdk = useSDK()
   const settings = useSettings()
   const prompt = usePrompt()
@@ -914,6 +916,43 @@ export default function Page() {
     loadFile: file.load,
   })
 
+  // review 列表里图片等媒体文件的「打开原图 / 下载原图」。
+  // desktop（Tauri）走系统默认应用打开本地文件；web 环境没有 openPath，则读文件内容触发浏览器下载。
+  const openReviewMedia = (path: string) => {
+    const join = (dir: string, rel: string) => {
+      const base = dir.replace(/[\\/]+$/, "")
+      const normalized = rel.replace(/^[\\/]+/, "")
+      const sep = base.includes("\\") && !base.includes("/") ? "\\" : "/"
+      return base ? `${base}${sep}${normalized}` : normalized
+    }
+
+    if (platform.openPath) {
+      const full = join(sdk.directory, path)
+      void platform.openPath(full).catch((error) => {
+        console.debug("[session-review] failed to open media file", { path, full, error })
+      })
+      return
+    }
+
+    // web 兜底：读文件内容拼成 data-url，用 <a download> 触发下载。
+    void sdk.client.file
+      .read({ path })
+      .then((res) => {
+        const data = res.data
+        if (!data || data.encoding !== "base64" || typeof data.content !== "string" || !data.mimeType) return
+        const href = `data:${data.mimeType};base64,${data.content}`
+        const a = document.createElement("a")
+        a.href = href
+        a.download = path.split(/[\\/]/).pop() ?? "download"
+        document.body.appendChild(a)
+        a.click()
+        a.remove()
+      })
+      .catch((error) => {
+        console.debug("[session-review] failed to download media file", { path, error })
+      })
+  }
+
   const changesTitle = () => {
     if (!canReview()) {
       return null
@@ -1012,6 +1051,7 @@ export default function Page() {
         focusedComment={comments.focus()}
         onFocusedCommentChange={comments.setFocus}
         onViewFile={openReviewFile}
+        onOpenFile={openReviewMedia}
         classes={input.classes}
       />
     </Show>
