@@ -1,4 +1,5 @@
 import { parseCommentNote, readCommentMetadata } from "@/utils/comment-note"
+import { dedupeImageVariants } from "./diff-media-dedupe"
 import { AssistantMessage, Part, SessionStatus, SnapshotFileDiff, UserMessage } from "@opencode-ai/sdk/v2"
 import { groupParts, PartGroup, renderable } from "@opencode-ai/ui/message-part"
 import { Data, Equal } from "effect"
@@ -212,14 +213,18 @@ export namespace Timeline {
 
     if (isActive && status === "retry") rows.push(new TimelineRow.Retry({ userMessageID: userMessage.id }))
 
-    const diffs = (userMessage.summary?.diffs ?? [])
-      .reduceRight<SummaryDiff[]>((result, diff) => {
-        if (!isSummaryDiff(diff)) return result
-        if (result.some((item) => item.file === diff.file)) return result
-        result.push(diff)
-        return result
-      }, [])
-      .reverse()
+    // 先按完整路径去重（同一文件多次改动只留最后一次），再把 codex 生成图常见的同名
+    // 多格式（x.png + x.jpg）折叠成一张（优先 png），避免时间线出现两张相同的图。
+    const diffs = dedupeImageVariants(
+      (userMessage.summary?.diffs ?? [])
+        .reduceRight<SummaryDiff[]>((result, diff) => {
+          if (!isSummaryDiff(diff)) return result
+          if (result.some((item) => item.file === diff.file)) return result
+          result.push(diff)
+          return result
+        }, [])
+        .reverse(),
+    )
     if (diffs.length > 0 && (status === "idle" || !isActive)) {
       rows.push(
         new TimelineRow.DiffSummary({
