@@ -21,7 +21,7 @@
  * 文件图标兜底，无需改）。
  */
 
-import type { PDFDocumentProxy } from "pdfjs-dist"
+import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist"
 // pdfjs-dist 体积大（库 + worker 共 ~2MB），用动态 import 让它只在用户真的拖了 PDF 时才进内存，
 // 不污染 session 路由初始 chunk（与 xlsx / mammoth 同样懒加载）。
 // worker 资源用 `?url` 静态引入——vite 据此把 worker .mjs 产出成独立 hash 资源并返回其 URL 字符串
@@ -90,6 +90,38 @@ function pageLooksImageHeavy(textLen: number): boolean {
   return textLen < 40
 }
 
+/**
+ * 该页是否含位图图像对象（插图 / 图表截图 / 照片 / 印章 / 扫描页等）。
+ *
+ * 用 getOperatorList 检测绘制指令里有无 image XObject / inline image / image mask。
+ * 矢量图形（path 绘制的 logo、图标、纯文字 logo）不算——它们的信息已由文字/结构承载，
+ * 无需渲染走 vision，避免给带页眉矢量 logo 的纯文字文档徒增 token。
+ *
+ * 这是"智能渲染含图页"策略的核心：图文混排页（既有正文又有位图插图）由此被识别出来，
+ * 文字照常抽取，同时整页渲染成图让模型用视觉读图，不再漏掉插图/图表的信息。
+ */
+async function pageHasBitmapImage(page: PDFPageProxy, OPS: PdfjsModule["OPS"]): Promise<boolean> {
+  try {
+    const { fnArray } = await page.getOperatorList()
+    for (const fn of fnArray) {
+      if (
+        fn === OPS.paintImageXObject ||
+        fn === OPS.paintImageXObjectRepeat ||
+        fn === OPS.paintInlineImageXObject ||
+        fn === OPS.paintInlineImageXObjectGroup ||
+        fn === OPS.paintImageMaskXObject ||
+        fn === OPS.paintImageMaskXObjectGroup ||
+        fn === OPS.paintImageMaskXObjectRepeat
+      ) {
+        return true
+      }
+    }
+    return false
+  } catch {
+    return false
+  }
+}
+
 async function renderPdfPageToJpeg(doc: PDFDocumentProxy, pageNumber: number): Promise<string | null> {
   try {
     const page = await doc.getPage(pageNumber)
@@ -110,10 +142,11 @@ async function renderPdfPageToJpeg(doc: PDFDocumentProxy, pageNumber: number): P
 }
 
 /**
- * PDF：逐页抽文本拼成一个 text part；遇到“图为主”的页额外渲染成 image part 走 vision。
+ * PDF：逐页抽文本拼成一个 text part；含位图插图 / 图表 / 扫描页的页额外渲染成 image part 走 vision。
  *
- * - 纯文本 PDF：只产 1 个 text part。
- * - 含大量图 / 扫描件：text part（可能很短）+ 若干页渲染图（≤ MAX_PDF_RENDER_PAGES）。
+ * - 纯文字 PDF（无位图）：只产 1 个 text part。
+ * - 图文混排（正文 + 插图 / 图表 / 截图）：text part + 含图页渲染图（≤ MAX_PDF_RENDER_PAGES）。
+ * - 扫描件 / 纯图：text part（可能很短 / 空）+ 各页渲染图。
  */
 async function extractPdf(file: File): Promise<ExtractResult> {
   const pdfjs = await loadPdfjs()
@@ -124,7 +157,7 @@ async function extractPdf(file: File): Promise<ExtractResult> {
   try {
     const total = doc.numPages
     const textPieces: string[] = []
-    const imageHeavyPages: number[] = []
+    const pagesToRender: number[] = []
 
     for (let pageNumber = 1; pageNumber <= total; pageNumber++) {
       const page = await doc.getPage(pageNumber)
@@ -135,7 +168,13 @@ async function extractPdf(file: File): Promise<ExtractResult> {
         .replace(/[ \t]+/g, " ")
         .trim()
       if (pageText) textPieces.push(`--- 第 ${pageNumber} 页 ---\n${pageText}`)
-      if (pageLooksImageHeavy(pageText.length)) imageHeavyPages.push(pageNumber)
+      // 该页需要渲染成图走 vision 的两种情况（"智能渲染含图页"策略）：
+      //  1) 扫描件 / 纯图页（几乎无文字）——仅靠文本会整页丢失；
+      //  2) 图文混排但含位图插图 / 图表 / 截图——文字抽到了，但图承载的信息要靠视觉。
+      // 矢量 logo / 图标不触发（见 pageHasBitmapImage），避免纯文字文档徒增 token。
+      if (pageLooksImageHeavy(pageText.length) || (await pageHasBitmapImage(page, pdfjs.OPS))) {
+        pagesToRender.push(pageNumber)
+      }
     }
 
     const joined = textPieces.join("\n\n")
@@ -143,20 +182,18 @@ async function extractPdf(file: File): Promise<ExtractResult> {
       attachments.push(textAttachment(clampText(joined, file.name, notices), file.name))
     }
 
-    // 含图页渲染成 vision 图（扫描件 / 图表为主的 PDF）。
-    if (imageHeavyPages.length > 0) {
-      let pagesToRender = imageHeavyPages
-      // 整本几乎无文本（扫描件）：渲染前若干页；否则只渲染那些“图为主”的页。
-      if (joined.trim().length === 0 && total <= MAX_PDF_RENDER_PAGES) {
-        pagesToRender = Array.from({ length: total }, (_, i) => i + 1)
-      }
-      if (pagesToRender.length > MAX_PDF_RENDER_PAGES) {
+    // 含图页（扫描件 / 图文混排的插图图表）渲染成 vision 图，让模型用视觉读图。
+    if (pagesToRender.length > 0) {
+      let pages = pagesToRender
+      if (pages.length > MAX_PDF_RENDER_PAGES) {
         notices.push(
-          `${file.name}：含图页 ${pagesToRender.length} 页超过单次 ${MAX_PDF_RENDER_PAGES} 页上限，仅渲染前 ${MAX_PDF_RENDER_PAGES} 页图像，其余请分批上传。`,
+          `${file.name}：含图页 ${pages.length} 页超过单次 ${MAX_PDF_RENDER_PAGES} 页上限，仅渲染前 ${MAX_PDF_RENDER_PAGES} 页图像，其余请分批上传。`,
         )
-        pagesToRender = pagesToRender.slice(0, MAX_PDF_RENDER_PAGES)
+        pages = pages.slice(0, MAX_PDF_RENDER_PAGES)
+      } else {
+        notices.push(`${file.name}：含图 / 图表页 ${pages.length} 页已一并渲染为图像供模型识别（会增加 token 用量）。`)
       }
-      for (const pageNumber of pagesToRender) {
+      for (const pageNumber of pages) {
         const dataUrl = await renderPdfPageToJpeg(doc, pageNumber)
         if (dataUrl) {
           attachments.push({
