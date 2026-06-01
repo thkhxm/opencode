@@ -250,7 +250,11 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         setShowCustomAgents(value: boolean) {
           setStore("general", "showCustomAgents", value)
         },
-        newLayoutDesigns: withFallback(() => store.general?.newLayoutDesigns, newLayoutDesignsDefault),
+        // P2：FORCE_STABLE_LAYOUT 下钉死 false（忽略持久值），彻底封死未完成的 V2 布局——
+        // 避免曾手动开过该开关、持久化了 true 的用户重启后再次丢失左右栏。
+        newLayoutDesigns: FORCE_STABLE_LAYOUT
+          ? () => false
+          : withFallback(() => store.general?.newLayoutDesigns, newLayoutDesignsDefault),
         setNewLayoutDesigns(value: boolean) {
           setStore("general", "newLayoutDesigns", value)
         },

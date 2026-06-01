@@ -10,6 +10,7 @@ import { useTheme, type ColorScheme } from "@opencode-ai/ui/theme/context"
 import { showToast } from "@opencode-ai/ui/toast"
 import { useParams } from "@solidjs/router"
 import { useLanguage } from "@/context/language"
+import { FORCE_STABLE_LAYOUT } from "@/branding"
 import { usePermission } from "@/context/permission"
 import { usePlatform, type DisplayBackend } from "@/context/platform"
 import { useServerSync } from "@/context/server-sync"
@@ -400,17 +401,21 @@ export const SettingsGeneral: Component = () => {
           </div>
         </SettingsRow>
 
-        <SettingsRow
-          title={language.t("settings.general.row.newLayoutDesigns.title")}
-          description={language.t("settings.general.row.newLayoutDesigns.description")}
-        >
-          <div data-action="settings-new-layout-designs">
-            <Switch
-              checked={settings.general.newLayoutDesigns()}
-              onChange={(checked) => settings.general.setNewLayoutDesigns(checked)}
-            />
-          </div>
-        </SettingsRow>
+        {/* P2：FORCE_STABLE_LAYOUT 下隐藏「新布局」实验开关——桌面端强制经典布局，
+            开关无意义且误点会丢左右栏。 */}
+        <Show when={!FORCE_STABLE_LAYOUT}>
+          <SettingsRow
+            title={language.t("settings.general.row.newLayoutDesigns.title")}
+            description={language.t("settings.general.row.newLayoutDesigns.description")}
+          >
+            <div data-action="settings-new-layout-designs">
+              <Switch
+                checked={settings.general.newLayoutDesigns()}
+                onChange={(checked) => settings.general.setNewLayoutDesigns(checked)}
+              />
+            </div>
+          </SettingsRow>
+        </Show>
       </SettingsList>
     </div>
   )

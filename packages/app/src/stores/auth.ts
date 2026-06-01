@@ -333,7 +333,16 @@ const applySession = (next: AuthState, options?: { persist?: boolean }) => {
   //   登录态不丢：reload 前 writePersisted 已落 refresh_token，reload 后 bootstrapInner 用它自动恢复登录态。
   const synced = getSyncedAccountID()
   if (synced !== next.accountID) {
+    // P2 熔断：sessionStorage 若持续抛错，marker 永远读不到 → 同一账号每次 reload 后又 reload
+    //（死循环白屏）。用 localStorage（bootstrap 已依赖、可靠）记上次 reload 的 {账号, 时刻}：
+    // 同账号 5s 内已 reload 过仍要再 reload，判定为该死循环 → 熔断（只设内存态不 reload，
+    // 接受内存列表残留也好过白屏死循环）。正常切账号是不同账号，不会误熔断。
+    if (reloadTooRecent(next.accountID)) {
+      renderedAccountID = next.accountID
+      return
+    }
     // DOM 当前同步的账号 ≠ 目标账号（含冷启动 marker 缺失：DOM 是对着默认 db bootstrap 的）→ reload 一次。
+    markReloadNow(next.accountID)
     setSyncedAccountID(next.accountID)
     renderedAccountID = next.accountID
     reloadRenderer()
@@ -390,6 +399,36 @@ function setSyncedAccountID(accountID: string | null): void {
     sessionStorage.setItem(SYNCED_ACCOUNT_KEY, accountID)
   } catch {
     // 隐私模式 / quota：忽略；模块级 renderedAccountID 仍兜底同一 DOM 实例内的防抖。
+  }
+}
+
+/**
+ * 防 reload 死循环的熔断（P2 加固）：localStorage 记上次 reload 的 {账号, 时刻}。
+ * 若 sessionStorage marker 持续不可用，会出现同一账号反复 reload；这里据 localStorage
+ * 判断「同账号 5s 内刚 reload 过」→ 熔断跳过本次 reload。正常切账号是不同账号、不误伤。
+ * 用 localStorage 而非 sessionStorage：bootstrap 已依赖 localStorage 且它在本场景下可靠。
+ */
+const RELOAD_GUARD_KEY = "punkcodeai.lastReload"
+const RELOAD_GUARD_WINDOW_MS = 5000
+
+function reloadTooRecent(accountID: string): boolean {
+  if (typeof localStorage === "undefined") return false
+  try {
+    const raw = localStorage.getItem(RELOAD_GUARD_KEY)
+    if (!raw) return false
+    const parsed = JSON.parse(raw) as { id?: string; at?: number }
+    return parsed.id === accountID && typeof parsed.at === "number" && Date.now() - parsed.at < RELOAD_GUARD_WINDOW_MS
+  } catch {
+    return false
+  }
+}
+
+function markReloadNow(accountID: string): void {
+  if (typeof localStorage === "undefined") return
+  try {
+    localStorage.setItem(RELOAD_GUARD_KEY, JSON.stringify({ id: accountID, at: Date.now() }))
+  } catch {
+    // ignore
   }
 }
 

@@ -88,6 +88,7 @@ import {
 } from "./layout/sidebar-workspace"
 import { ProjectDragOverlay, SortableProject, type ProjectSidebarContext } from "./layout/sidebar-project"
 import { HIDE_PROVIDER_UI } from "@/branding"
+import { notifySessionTabsRemoved } from "@/components/titlebar-session-events"
 import { sessionTitle } from "@/utils/session-title"
 import { SidebarContent } from "./layout/sidebar-shell"
 import { BalanceWidget } from "@/components/balance-widget"
@@ -1006,8 +1007,11 @@ export default function Layout(props: ParentProps) {
   async function deleteSession(session: Session) {
     const [store, setStore] = serverSync.child(session.directory)
     const sessions = store.session ?? []
-    const index = sessions.findIndex((s) => s.id === session.id)
-    const nextSession = sessions[index + 1] ?? sessions[index - 1]
+    // P2：导航目标用「可见的 root 会话」（与侧栏显示一致），避免删当前会话后跳到侧栏
+    // 看不见的子会话/已归档会话。删除本身仍基于全量 sessions 做子会话级联。
+    const visible = sortedRootSessions(store, Date.now())
+    const vIndex = visible.findIndex((s) => s.id === session.id)
+    const nextSession = visible[vIndex + 1] ?? visible[vIndex - 1]
 
     const ok = await serverSDK.client.session
       .delete({ directory: session.directory, sessionID: session.id })
@@ -1048,6 +1052,9 @@ export default function Layout(props: ParentProps) {
         draft.session = draft.session.filter((s) => !removed.has(s.id))
       }),
     )
+
+    // P2：广播 tab 移除，关掉指向已删会话的死 tab（与 message-timeline 删除逻辑一致）。
+    notifySessionTabsRemoved({ directory: session.directory, sessionIDs: [...removed] })
 
     if (removed.has(params.id ?? "")) {
       if (nextSession && !removed.has(nextSession.id)) {
