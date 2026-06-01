@@ -257,6 +257,30 @@ function parseSetCredentialsCommand(value: unknown): SidecarCommand | undefined 
 const PUNKCODE_PROVIDER_ID = "punkcodeai"
 
 /**
+ * 判断一个 punkcode 模型是否支持 reasoning（思考模式）。
+ *
+ * 背景（#3 思考模式选择器缺失）：UI 的「思考模式」(reasoning effort: minimal/low/
+ * medium/high) 选择器由 model.variants 驱动——core 端 `Provider.transform.variants()`
+ * 只在 `capabilities.reasoning === true` 时才会自动给 @ai-sdk/openai 的 gpt-5 系列
+ * 算出 reasoningEffort 变体（见 provider/transform.ts），否则返回 {}，导致 prompt-input
+ * 的 variant 选择器（`<Show when={variants().length > 2}>`）永不出现。
+ *
+ * 之前所有模型硬编码 reasoning:false，所以思考模式选择器从来不显示。这里按 sub2api
+ * `/cli/llm` 上报的模型 id 推断能力（与后端 isReasoningModel 对齐）：
+ *   - gpt-5* 系列：reasoning-only 模型，开 reasoning（codex /responses 主力）
+ *   - gpt-image* / dall-e*：图片生成模型，无 reasoning
+ *   - 其余（gpt-4* 等）：默认无 reasoning
+ *
+ * 注：reasoning:true 后 variant 由 core 自动算（base gpt-5 → minimal/low/medium/high），
+ * 无需在桌面端手写 variants，避免与上游 effort 表脱节。
+ */
+function modelSupportsReasoning(id: string): boolean {
+  const lower = id.toLowerCase()
+  if (lower.startsWith("gpt-image") || lower.startsWith("dall-e")) return false
+  return lower.startsWith("gpt-5")
+}
+
+/**
  * 把 PunkcodeAI 凭据塞进 process.env 并 dispose 所有 instance state cache,
  * 让下一次 provider.list / config.get 重新初始化。
  *
@@ -302,7 +326,10 @@ async function applyPunkcodeCredentials(credentials: SetCredentialsCommand["cred
         // 桌面端按 image_generation 工具结果（base64 PNG）渲染。
         modalities: { input: ["text", "image"], output: ["text", "image"] },
         attachment: true,
-        reasoning: false,
+        // #3：按模型 id 推断 reasoning 能力（gpt-5* 系列开启）。开启后 core 的
+        // Provider.transform.variants() 会自动算出思考模式（reasoning effort）变体，
+        // UI 的思考模式选择器随之出现。非 reasoning 模型（图片生成等）保持 false。
+        reasoning: modelSupportsReasoning(model.id),
         temperature: true,
         tool_call: true,
         provider: { npm: "@ai-sdk/openai", api: credentials.baseUrl },
