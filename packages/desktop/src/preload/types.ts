@@ -35,8 +35,14 @@ export type FatalRendererError = {
  * 通过 IPC 转给主进程，主进程再透传给 sidecar 进程的 Provider 系统。
  *
  * 重要：sk- key **不入 localStorage / 不入 electron-store / 不入磁盘**，仅在主进程内存 + sidecar 进程内存。
+ *
+ * M9（账号隔离修复）：新增 `accountID`（格式 `${url}:${email}`，与 auth store 一致）。
+ *   - 主进程据此判断"是否切换了账号"——切换则 kill + 重启 sidecar 进程，
+ *     让新进程用按 accountID 隔离的 XDG_DATA_HOME / XDG_STATE_HOME，session db 物理隔离。
+ *   - 同账号重复 push（refresh 续期 / 重启恢复）不触发重启，只热更新 sk-key。
  */
 export type PunkcodeCredentials = {
+  accountID: string
   apiKey: string
   baseUrl: string
   anthropicBaseUrl: string

@@ -36,6 +36,7 @@ type StopCommand = { type: "stop" }
 type SetCredentialsCommand = {
   type: "set-credentials"
   credentials: {
+    accountID: string
     apiKey: string
     baseUrl: string
     anthropicBaseUrl: string
@@ -208,15 +209,24 @@ function parseStartCommand(value: unknown): StartCommand | undefined {
   }
 }
 
-function parseSetCredentialsCommand(value: unknown): SetCredentialsCommand | undefined {
+function parseSetCredentialsCommand(value: unknown): SidecarCommand | undefined {
   const command = value as { credentials?: unknown }
   const creds = command.credentials as Partial<SetCredentialsCommand["credentials"]> | undefined
   if (!creds || typeof creds !== "object") return
-  if (typeof creds.apiKey !== "string" || creds.apiKey.length === 0) return
-  if (typeof creds.baseUrl !== "string" || creds.baseUrl.length === 0) return
+  // M9（杜绝旧 key 残留）：空 apiKey 不再"丢弃命令、保留旧 key"——等价于 clear。
+  // 任何路径下只要 renderer 拉不到当前账号的 sk-key（push 空字符串），sidecar 立即清掉
+  // OPENCODE_AUTH_CONTENT，绝不让上一账号的 key 苟活。
+  if (typeof creds.apiKey !== "string" || creds.apiKey.length === 0) {
+    return { type: "clear-credentials" }
+  }
+  if (typeof creds.baseUrl !== "string" || creds.baseUrl.length === 0) {
+    // baseUrl 缺失等同凭据不完整，同样清掉而不是保留旧值。
+    return { type: "clear-credentials" }
+  }
   return {
     type: "set-credentials",
     credentials: {
+      accountID: typeof creds.accountID === "string" ? creds.accountID : "",
       apiKey: creds.apiKey,
       baseUrl: creds.baseUrl,
       anthropicBaseUrl: typeof creds.anthropicBaseUrl === "string" ? creds.anthropicBaseUrl : "",

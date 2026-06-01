@@ -313,12 +313,39 @@ const applySession = (next: AuthState, options?: { persist?: boolean }) => {
     })
   }
   scheduleRefresh(next)
+
+  // M9（session 按账号隔离）：renderer 已经在反映另一个账号的 session/project 内存态时，
+  // 切到新账号必须整窗 reload，否则会看到上一账号的会话列表。
+  // 首次进入登录态（renderedAccountID === null，如冷启动 bootstrap / 干净 login）不 reload。
+  if (renderedAccountID !== null && renderedAccountID !== next.accountID) {
+    reloadRenderer()
+    return
+  }
+  renderedAccountID = next.accountID
 }
 
 const clearSession = () => {
   clearRefreshTimer()
   setState(null)
   writePersisted(null)
+}
+
+/**
+ * M9（session 按账号隔离）：当前 renderer 内存里 server-sync / session 列表所反映的账号。
+ *
+ * - 切换账号时（accountID 变了）sidecar 会重启到另一账号的隔离 db，
+ *   但 renderer 进程不重启——它还揣着上一账号的 session/project 内存缓存。
+ * - 用 `location.reload()` 把整个 renderer 重置：reload 后 ensureBootstrap 重跑，
+ *   server-sync 重新对着（已切换到新账号 db 的）sidecar bootstrap，拿到新账号自己的 session 列表，
+ *   彻底杜绝"看到上一账号会话"。这是最可靠、零残留的做法（局部 invalidate 容易漏 children store / sdk cache）。
+ */
+let renderedAccountID: string | null = null
+
+/** reload 整个 renderer 窗口（非浏览器环境 no-op）。用于账号切换后强制清空内存态。 */
+function reloadRenderer(): void {
+  if (typeof window !== "undefined" && typeof window.location?.reload === "function") {
+    window.location.reload()
+  }
 }
 
 const handleAuthSuccess = async (server: string, auth: CredentialsAuthResponse) => {
@@ -344,11 +371,23 @@ const handleAuthSuccess = async (server: string, auth: CredentialsAuthResponse) 
     },
     ...creds,
   }
-  // 关键：必须先把 sk- 推到 sidecar，再 applySession 触发 UI 进入登录态。
-  // 否则 AuthGate 抢先渲染、provider query 跑在没有 punkcodeai 凭据的 sidecar 上，
-  // 拿到空 provider list 缓存，模型下拉空白。
-  // pushCredentialsToSidecar 内部已吞错（IPC 失败不抛），所以正常路径不会因此 throw。
-  await pushCredentialsToSidecar(next)
+  // M9（账号隔离修复 / 计费安全）：
+  //   1) 先 clearCredentialsOnSidecar —— 消除"旧账号 sk-key 还在 sidecar"的残留窗口。
+  //      （切换账号时尤其关键：上一账号 logout 不一定走过，直接登另一账号也要先清旧。）
+  //   2) 再 push 新账号凭据。push 带 accountID，主进程发现 accountID 变了会重启 sidecar
+  //      切到新账号隔离的 session db。
+  //   3) push 失败（Electron 下 IPC 抛错）→ **不 applySession**，回滚 sidecar 凭据并抛错，
+  //      让 UI 提示用户重试。绝不允许"renderer 进登录态但 sidecar 揣着别的账号 key"。
+  // 顺序同样保证 AuthGate 不会在没有 punkcodeai 凭据的 sidecar 上抢跑 provider query。
+  await clearCredentialsOnSidecar()
+  const pushed = await pushCredentialsToSidecar(next)
+  if (!pushed) {
+    // 回滚：把刚塞进去（可能半截）的凭据再清掉，避免脏状态。
+    await clearCredentialsOnSidecar()
+    throw new AccountError(
+      "Credentials.pushToSidecar: 无法把账号凭据同步到本地服务，请重试登录",
+    )
+  }
   applySession(next)
 }
 
@@ -516,16 +555,32 @@ async function callListBalanceRequests(
 }
 
 /**
+ * 是否处于 Electron 桌面端（window.api 可用）。
+ *
+ * dev 浏览器调试模式下 window.api 不存在——此时 IPC 推/清凭据是 no-op，
+ * 不应把"IPC 不可用"当成失败（否则浏览器调试永远登录不进去）。
+ */
+function isDesktopRuntime(): boolean {
+  const api = typeof window !== "undefined" ? (window as { api?: unknown }).api : undefined
+  return Boolean(api)
+}
+
+/**
  * Renderer → main 进程 IPC：推 sk- 凭据给 sidecar。
  *
  * 调用方：登录/注册/bootstrap 成功后、refresh 续期成功后（如果第一次没拉到）。
- * 失败处理：当桌面端不在 Electron 中（如纯浏览器 dev 调试），window.api 为 undefined，
- *           IPC 直接跳过，不影响 store 流程；用户不会被踢下线。
+ *
+ * M9（账号隔离修复）：**不再静默吞 IPC 错误**。
+ *   - 返回 true：凭据已成功推给 sidecar（或处于非 Electron 浏览器 dev 模式，IPC 是 no-op）。
+ *   - 返回 false：处于 Electron 但 IPC push 抛错——调用方据此决定不要进入登录态，
+ *     避免出现"renderer 以为登过了，但 sidecar 还揣着旧账号 sk-key"的串号窗口。
+ *   - payload 带上 `accountID`，主进程据此决定是否需要重启 sidecar 切到该账号的隔离 db。
  */
-async function pushCredentialsToSidecar(state: AuthState): Promise<void> {
+async function pushCredentialsToSidecar(state: AuthState): Promise<boolean> {
   const api = (typeof window !== "undefined" ? window.api : undefined) as
     | {
         setPunkcodeCredentials?: (input: {
+          accountID: string
           apiKey: string
           baseUrl: string
           anthropicBaseUrl: string
@@ -535,36 +590,47 @@ async function pushCredentialsToSidecar(state: AuthState): Promise<void> {
       }
     | undefined
   if (!api?.setPunkcodeCredentials) {
-    // M6 P2-A：dev 浏览器调试模式下 window.api 不存在；静默 return 之外打一条 warn，
+    // M6 P2-A：dev 浏览器调试模式下 window.api 不存在；打一条 warn，
     // 让开发者知道 sidecar 凭据没真的推下去（避免 "为什么模型列表是空" 这种排查浪费时间）。
+    // 浏览器 dev 模式没有 sidecar，视为成功（no-op），不阻塞登录。
     console.warn(
       "PunkcodeAI: window.api unavailable, sidecar credentials skipped (dev browser mode?)",
     )
-    return
+    return true
   }
   try {
     await api.setPunkcodeCredentials({
+      accountID: state.accountID,
       apiKey: state.apiKey,
       baseUrl: state.llmBaseUrl,
       anthropicBaseUrl: state.anthropicBaseUrl,
       geminiBaseUrl: state.geminiBaseUrl,
       models: state.models,
     })
-  } catch {
-    // IPC 失败也不要踢用户下线；下次 refresh 会再尝试。
+    return true
+  } catch (err) {
+    // M9：IPC push 失败必须让调用方感知。绝不能在 sidecar 还揣着旧 key 的情况下进入登录态。
+    console.error("PunkcodeAI: failed to push credentials to sidecar", err)
+    return false
   }
 }
 
-/** 通知 sidecar 清掉 PunkcodeAI 凭据（退出登录路径用） */
-async function clearCredentialsOnSidecar(): Promise<void> {
+/**
+ * 通知 sidecar 清掉 PunkcodeAI 凭据（退出登录 / 切换账号"先清旧"路径用）。
+ *
+ * M9：返回 boolean 让调用方感知失败（浏览器 dev 模式无 sidecar，视为成功）。
+ */
+async function clearCredentialsOnSidecar(): Promise<boolean> {
   const api = (typeof window !== "undefined" ? window.api : undefined) as
     | { clearPunkcodeCredentials?: () => Promise<void> }
     | undefined
-  if (!api?.clearPunkcodeCredentials) return
+  if (!api?.clearPunkcodeCredentials) return true
   try {
     await api.clearPunkcodeCredentials()
-  } catch {
-    // 清理失败不阻塞退出登录。
+    return true
+  } catch (err) {
+    console.error("PunkcodeAI: failed to clear credentials on sidecar", err)
+    return false
   }
 }
 
@@ -659,14 +725,13 @@ async function bootstrapInner(): Promise<void> {
       ? persisted.accountID.slice(url.length + 1)
       : persisted.accountID
 
-    // M6: bootstrap 也要拉 sk-key + 模型列表（用刚刷出来的 access_token）。
-    // 失败不阻塞 bootstrap：先把会话恢复出来，UI 仍可登录态；下次 refresh 会触发 ensureCredentialsAfterRefresh 补拉。
-    let creds: Awaited<ReturnType<typeof syncCredentialsCore>>
-    try {
-      creds = await syncCredentialsCore(url, pair.access_token)
-    } catch {
-      creds = { apiKey: "", llmBaseUrl: "", anthropicBaseUrl: "", geminiBaseUrl: "", models: [] }
-    }
+    // M9（账号隔离修复 / 计费安全）：用 localStorage refresh_token 自动恢复时，
+    //   必须拉到**该账号的新 sk-key** 才能 push 给 sidecar。
+    //   sk-key 拉失败 → clearCredentialsOnSidecar() + 清 localStorage，强制用户重新登录，
+    //   绝不允许"会话恢复成功但 sidecar 揣着旧/别的账号 key"导致用错账号扣错钱。
+    //   （旧实现里 sk- 拉失败时仍 applySession 进登录态、等下次 refresh 补拉——
+    //    这给了"旧账号 token 静默续命串号"的窗口，M9 收紧。）
+    const creds = await syncCredentialsCore(url, pair.access_token)
 
     // M7: refresh 成功后立即拉一次 /cli/me 补全 user.email/nickname/balance/usedToday/usedMonth。
     // 失败兜底用 accountID 反推的 email + 占位 0（避免 widget 显示空白）；下一次 30s 轮询自然回填。
@@ -693,11 +758,20 @@ async function bootstrapInner(): Promise<void> {
       },
       ...creds,
     }
-    // 同 handleAuthSuccess：先推 sidecar 再 applySession，避免 AuthGate 抢跑 provider query 拿空数据。
-    if (creds.apiKey) await pushCredentialsToSidecar(next)
+    // 同 handleAuthSuccess：先清旧再推新，再 applySession，避免 AuthGate 抢跑 provider query 拿空数据，
+    // 也避免 sidecar 残留上一账号 key。push 失败 → 不进登录态，清 sidecar + localStorage 重登。
+    await clearCredentialsOnSidecar()
+    const pushed = await pushCredentialsToSidecar(next)
+    if (!pushed) {
+      await clearCredentialsOnSidecar()
+      writePersisted(null)
+      return
+    }
     applySession(next)
   } catch {
-    // refresh_token 过期 / 网络故障 → 清掉持久化让用户重新登录。
+    // refresh_token 过期 / 网络故障 / sk-key 拉取失败 → 清 sidecar 凭据 + 清持久化，让用户重新登录。
+    // 清 sidecar 是 M9 关键：避免上一次会话残留在 sidecar 进程里的旧账号 key 继续被用于聊天。
+    await clearCredentialsOnSidecar()
     writePersisted(null)
   }
 }
@@ -787,10 +861,19 @@ export const useAuth = () => ({
     await handleAuthSuccess(server, auth)
   },
 
-  /** 退出登录：清内存 + 清 localStorage + 停定时器 + 通知 sidecar 清掉 sk- */
+  /**
+   * 退出登录：清内存 + 清 localStorage + 停定时器 + 通知 sidecar 清掉 sk-。
+   *
+   * M9：clear 必须真正送达 sidecar（删 OPENCODE_AUTH_CONTENT + dispose instance），
+   *     然后 reload 整个 renderer——把上一账号残留的 session/project 内存态彻底清掉，
+   *     再由 AuthGate 把用户带到 /login。reload 前 localStorage 已被 clearSession 清空，
+   *     下次启动不会自动恢复上一账号（强制重新登录拉新账号），从而保证不同账号 session 互不可见。
+   */
   async signOut(): Promise<void> {
     clearSession()
+    renderedAccountID = null
     await clearCredentialsOnSidecar()
+    reloadRenderer()
   },
 
   /** 主动触发一次 refresh（调试 / "余额刷新"按钮 等场景用；UI 层一般不用） */

@@ -37,6 +37,17 @@ const SIDECAR_STOP_TIMEOUT = 6_000
 type SpawnLocalServerOptions = {
   needsMigration: boolean
   userDataPath: string
+  /**
+   * M9（session 按账号隔离）：按账号隔离的数据根目录。
+   *
+   * sidecar 进程的 db 路径由 `Global.Path.data`（= `XDG_DATA_HOME/opencode`）在**进程启动时**冻结，
+   * 运行期无法再切。因此账号隔离通过"不同账号用不同 XDG_DATA_HOME/XDG_STATE_HOME 启动 sidecar"实现：
+   *   - 传入此值时，spawn 出来的 sidecar 进程 env 里 XDG_DATA_HOME / XDG_STATE_HOME 指向该目录，
+   *     于是该账号的 session db（opencode-<channel>.db）物理落在专属子目录，互不可见。
+   *   - 不传（如登录前、未知账号）时回退到 userDataPath，行为同改造前。
+   * 切换账号 = 主进程 kill 当前 sidecar + 用新账号的 accountDataPath 重新 spawn（见 index.ts）。
+   */
+  accountDataPath?: string
   onSqliteProgress?: (progress: SqliteMigrationProgress) => void
   onStdout?: (message: string) => void
   onStderr?: (message: string) => void
@@ -86,7 +97,7 @@ export async function spawnLocalServer(
   const sidecar = join(dirname(fileURLToPath(import.meta.url)), "sidecar.js")
   const child = utilityProcess.fork(sidecar, [], {
     cwd: process.cwd(),
-    env: createSidecarEnv(),
+    env: createSidecarEnv(options.accountDataPath),
     serviceName: SIDECAR_SERVICE_NAME,
     stdio: "pipe",
   })
@@ -273,12 +284,19 @@ export async function checkHealth(url: string, password?: string | null): Promis
   }
 }
 
-function createSidecarEnv(): Record<string, string> {
+function createSidecarEnv(accountDataPath?: string): Record<string, string> {
   const env = Object.fromEntries(
     Object.entries(process.env).flatMap(([key, value]) => (value === undefined ? [] : [[key, String(value)]])),
   )
   delete env.DEBUG
   if (process.platform === "linux") delete env.LD_PRELOAD
+  // M9（session 按账号隔离）：把 sidecar 的 db / state 目录指向账号专属目录。
+  // db 路径 = XDG_DATA_HOME/opencode/opencode-<channel>.db（见 opencode storage/db.ts + core/global.ts），
+  // 在 sidecar 进程启动时冻结；故这里在 fork env 上设好，不同账号的 session 物理隔离。
+  if (accountDataPath) {
+    env.XDG_DATA_HOME = accountDataPath
+    env.XDG_STATE_HOME = accountDataPath
+  }
   return env
 }
 

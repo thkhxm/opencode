@@ -101,10 +101,63 @@ async function killSidecar() {
 type PunkcodeCredentialsPayload = Parameters<SidecarListener["setCredentials"]>[0]
 let pendingPunkcodeCredentials: PunkcodeCredentialsPayload | null = null
 
+/**
+ * M9（session 按账号隔离）：当前 sidecar 进程是为哪个 accountID 启动的。
+ *
+ * db 路径在 sidecar 进程启动时冻结，运行期切不了。所以切账号 = 重启 sidecar：
+ * 收到的 setCredentials 里 accountID 与本变量不同时，先 kill 当前 sidecar，
+ * 再用新账号的隔离数据目录 respawn，最后把新凭据推给新进程。
+ */
+let currentSidecarAccountID: string | null = null
+
+/**
+ * M9：重启 sidecar 进程的回调，由初始 spawn 时注入（带上 hostname/port/password 等固定参数）。
+ *
+ * 复用同一 port + password，renderer 的 SDK 端点不变、可无感重连。
+ * 入参是该账号的隔离数据目录（XDG_DATA_HOME/XDG_STATE_HOME）。
+ */
+let respawnSidecar: ((accountDataPath: string | undefined) => Promise<void>) | null = null
+
+/**
+ * M9：把 accountID 映射成隔离的数据目录。
+ *
+ * 形如 `${url}:${email}`，含 `:` `/` 等非法路径字符 → sanitize 成单段目录名。
+ * 不同账号 → 不同目录 → 不同 session db，物理隔离。
+ * 空 accountID（理论上不该发生）→ 返回 undefined，回退到默认共享目录。
+ */
+function accountDataPathFor(accountID: string | undefined): string | undefined {
+  if (!accountID) return undefined
+  const safe = accountID.replace(/[^a-zA-Z0-9._-]/g, "-").slice(0, 120)
+  if (!safe) return undefined
+  return join(app.getPath("userData"), "accounts", safe)
+}
+
 async function setPunkcodeCredentialsToSidecar(credentials: PunkcodeCredentialsPayload) {
   pendingPunkcodeCredentials = credentials
+  const nextAccountID = credentials.accountID || null
+
+  // 账号切换：当前 sidecar 是为别的账号（或未知账号）启动的，需要重启切到新账号隔离 db。
+  if (server && respawnSidecar && nextAccountID && currentSidecarAccountID !== nextAccountID) {
+    writeLog("utility", "switching sidecar account, respawning", {
+      from: currentSidecarAccountID,
+      to: nextAccountID,
+    })
+    try {
+      // respawn 内部会把 pendingPunkcodeCredentials（已是本次的新凭据）推给新进程，
+      // 并把 currentSidecarAccountID 设为新账号——所以这里 respawn 成功后直接返回，不重复 push。
+      await respawnSidecar(accountDataPathFor(nextAccountID))
+      currentSidecarAccountID = nextAccountID
+      return
+    } catch (e) {
+      writeLog("utility", "respawn sidecar for account switch failed", { error: String(e) }, "error")
+      // 重启失败 → 抛给 renderer，让它不进登录态（auth.ts handleAuthSuccess 据此回滚）。
+      throw e
+    }
+  }
+
   if (!server) return
   await server.setCredentials(credentials)
+  if (nextAccountID) currentSidecarAccountID = nextAccountID
 }
 
 async function clearPunkcodeCredentialsFromSidecar() {
@@ -350,29 +403,46 @@ const main = Effect.gen(function* () {
     useEnvProxy()
 
     logger.log("spawning sidecar", { url })
-    const { listener, health } = yield* Effect.promise(() =>
-      spawnLocalServer(hostname, port, password, {
+
+    // M9：把 spawn 抽成可复用的函数——初始启动 + 切账号 respawn 共用同一套
+    // hostname/port/password/needsMigration（复用 port+password 让 renderer 无感重连）。
+    // 入参 accountDataPath 决定 sidecar 进程用哪个账号隔离的 db 目录。
+    const doSpawn = async (accountDataPath: string | undefined) => {
+      const { listener, health } = await spawnLocalServer(hostname, port, password, {
         needsMigration,
         userDataPath: app.getPath("userData"),
+        accountDataPath,
         onSqliteProgress: (progress) => initEmitter.emit("sqlite", progress),
         onStdout: (message) => writeLog("server", "stdout", { message }),
         onStderr: (message) => writeLog("server", "stderr", { message }, "warn"),
         onExit: (code) => writeLog("utility", "sidecar exited", { code }, "warn"),
-      }),
-    )
-    server = listener
-    // 如果 renderer 在 sidecar 启动前已经通过 IPC 推过凭据（dev/race 场景），
-    // 此时 sidecar 已 ready，立刻把内存中的最新凭据推过去。
-    if (pendingPunkcodeCredentials) {
-      const creds = pendingPunkcodeCredentials
-      yield* Effect.promise(async () => {
+      })
+      server = listener
+      // 如果 renderer 在 sidecar 启动前已经通过 IPC 推过凭据（dev/race 场景），
+      // 此时 sidecar 已 ready，立刻把内存中的最新凭据推过去。
+      if (pendingPunkcodeCredentials) {
+        const creds = pendingPunkcodeCredentials
         try {
           await listener.setCredentials(creds)
+          if (creds.accountID) currentSidecarAccountID = creds.accountID
         } catch (e) {
           writeLog("utility", "set initial punkcode credentials failed", { error: String(e) }, "warn")
         }
-      })
+      }
+      return health
     }
+
+    // M9：注册 respawn 回调供切账号时调用——先停掉当前 sidecar，再用新账号目录起一个。
+    // respawn 后不需要重新等 health（renderer 会自己重连），但仍 await 一下健康检查避免立刻打挂。
+    respawnSidecar = async (accountDataPath: string | undefined) => {
+      const previous = server
+      server = null
+      if (previous) await previous.stop()
+      const health = await doSpawn(accountDataPath)
+      await Promise.race([health.wait, new Promise<void>((resolve) => setTimeout(resolve, 30_000))])
+    }
+
+    const health = yield* Effect.promise(() => doSpawn(undefined))
     yield* Deferred.succeed(serverReady, {
       url,
       username: "opencode",
