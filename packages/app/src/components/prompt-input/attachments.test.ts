@@ -22,6 +22,26 @@ describe("attachmentMime", () => {
     const file = new File([Uint8Array.of(0, 255, 1, 2)], "blob.bin", { type: "application/octet-stream" })
     expect(await attachmentMime(file)).toBeUndefined()
   })
+
+  test("detects docx by browser mime", async () => {
+    const mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    const file = new File([Uint8Array.of(0x50, 0x4b, 3, 4)], "doc.docx", { type: mime })
+    expect(await attachmentMime(file)).toBe(mime)
+  })
+
+  test("detects xlsx by extension when browser mime is empty", async () => {
+    const file = new File([Uint8Array.of(0x50, 0x4b, 3, 4)], "sheet.xlsx", { type: "" })
+    expect(await attachmentMime(file)).toBe(
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+  })
+
+  test("detects docx by extension when browser mime is octet-stream", async () => {
+    const file = new File([Uint8Array.of(0x50, 0x4b, 3, 4)], "doc.docx", { type: "application/octet-stream" })
+    expect(await attachmentMime(file)).toBe(
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+  })
 })
 
 describe("pasteMode", () => {

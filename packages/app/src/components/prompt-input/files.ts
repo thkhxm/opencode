@@ -22,6 +22,21 @@ const TEXT_MIMES = new Set([
 
 const SAMPLE = 4096
 
+/**
+ * 需要 renderer 本地提取的 Office 文档（docx / xlsx）。
+ *
+ * 这些 OOXML 二进制本来会被 textBytes() 判成二进制而拒收；这里显式识别它们的 mime / 扩展名，
+ * 返回真实 mime，交给 attachments.ts 走 extract.ts 本地提取（见 M11 大文件分析增强）。
+ * 注意：legacy .doc / .xls（CFB 二进制）不在支持范围（mammoth/SheetJS 对它们支持有限）。
+ */
+const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+const OFFICE_MIMES = new Set([DOCX_MIME, XLSX_MIME])
+const OFFICE_EXTS = new Map([
+  ["docx", DOCX_MIME],
+  ["xlsx", XLSX_MIME],
+])
+
 function kind(type: string) {
   return type.split(";", 1)[0]?.trim().toLowerCase() ?? ""
 }
@@ -54,8 +69,14 @@ export async function attachmentMime(file: File) {
   const type = kind(file.type)
   if (IMAGE_MIMES.has(type)) return type
   if (type === "application/pdf") return type
+  if (OFFICE_MIMES.has(type)) return type
 
   const suffix = ext(file.name)
+  // docx / xlsx：浏览器/系统给的 type 经常是空 / octet-stream / 误判，按扩展名兜底识别真实 mime。
+  const officeFallback = OFFICE_EXTS.get(suffix)
+  if (officeFallback && (!type || type === "application/octet-stream" || OFFICE_MIMES.has(type))) {
+    return officeFallback
+  }
   const fallback = IMAGE_EXTS.get(suffix) ?? (suffix === "pdf" ? "application/pdf" : undefined)
   if ((!type || type === "application/octet-stream") && fallback) return fallback
 

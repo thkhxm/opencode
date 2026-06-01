@@ -6,6 +6,7 @@ import { useLanguage } from "@/context/language"
 import { uuid } from "@/utils/uuid"
 import { getCursorPosition } from "./editor-dom"
 import { attachmentMime } from "./files"
+import { extractAttachment, needsExtraction } from "./extract"
 import { normalizePaste, pasteMode } from "./paste"
 
 function dataUrl(file: File, mime: string) {
@@ -45,6 +46,13 @@ export function createPromptAttachments(input: PromptAttachmentsInput) {
     })
   }
 
+  /** 软提示（截断 / 分批 / 大表 / 提取失败）用 toast 呈现。提示本身是完整自描述句子，不另加标题。 */
+  const notify = (messages: string[]) => {
+    for (const message of messages) {
+      showToast({ description: message })
+    }
+  }
+
   const add = async (file: File, toast = true) => {
     const mime = await attachmentMime(file)
     if (!mime) {
@@ -54,6 +62,27 @@ export function createPromptAttachments(input: PromptAttachmentsInput) {
 
     const editor = input.editor()
     if (!editor) return false
+
+    // M11：PDF / docx / xlsx 在 renderer 本地提取成 text(+image) part，绕开 punkcode 不支持 pdf
+    // modality 的限制，且不依赖本机命令行工具（pdftotext / python 等）。
+    if (needsExtraction(mime)) {
+      const { attachments, notices } = await extractAttachment(file, mime)
+      if (notices.length > 0) notify(notices)
+      if (attachments.length === 0) {
+        if (toast && notices.length === 0) warn()
+        return false
+      }
+      const parts: ImageAttachmentPart[] = attachments.map((item) => ({
+        type: "image",
+        id: uuid(),
+        filename: item.filename,
+        mime: item.mime,
+        dataUrl: item.dataUrl,
+      }))
+      const cursor = prompt.cursor() ?? getCursorPosition(editor)
+      prompt.set([...prompt.current(), ...parts], cursor)
+      return true
+    }
 
     const url = await dataUrl(file, mime)
     if (!url) return false

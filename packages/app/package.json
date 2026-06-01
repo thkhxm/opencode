@@ -68,13 +68,16 @@
     "fuzzysort": "catalog:",
     "ghostty-web": "github:anomalyco/ghostty-web#main",
     "luxon": "catalog:",
+    "mammoth": "1.12.0",
     "marked": "catalog:",
     "marked-shiki": "catalog:",
+    "pdfjs-dist": "5.7.284",
     "remeda": "catalog:",
     "shiki": "catalog:",
     "solid-js": "catalog:",
     "solid-list": "catalog:",
     "tailwindcss": "catalog:",
-    "virtua": "catalog:"
+    "virtua": "catalog:",
+    "xlsx": "0.18.5"
   }
 }

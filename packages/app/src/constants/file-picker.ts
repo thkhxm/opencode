@@ -3,6 +3,11 @@ export const ACCEPTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "im
 export const ACCEPTED_FILE_TYPES = [
   ...ACCEPTED_IMAGE_TYPES,
   "application/pdf",
+  // M11：Word / Excel 本地提取（renderer 用 mammoth / SheetJS 抽文本）。
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ".docx",
+  ".xlsx",
   "text/*",
   "application/json",
   "application/ld+json",
