@@ -60,12 +60,10 @@ const Login: Component = () => {
           否则无边框窗口在登录态完全无法拖动。data-tauri-drag-region 由 ui/base.css 赋 app-region:drag。 */}
       <div data-tauri-drag-region class="absolute top-0 left-0 right-0 h-10" />
       <div class="w-full max-w-sm flex flex-col items-center justify-center gap-6 px-6">
-        {/* PunkcodeAI 文字 logo（替换原 opencode 矢量字 logo）：mono 字体呼应原像素/geek 风 */}
-        <div class="font-mono text-3xl font-bold tracking-tight text-text-strong select-none shrink-0">
+        {/* PunkcodeAI 文字 logo：霓虹流光动效（.punkcode-logo 在 ui base.css）。
+            下方"登录"标题已移除——底部已有登录按钮，无需重复。 */}
+        <div class="punkcode-logo font-mono text-4xl font-bold tracking-tight select-none shrink-0">
           {PRODUCT_NAME}
-        </div>
-        <div class="flex flex-col items-center gap-1 text-center">
-          <h1 class="text-lg font-medium text-text-strong">{language.t("auth.login.title")}</h1>
         </div>
         <form class="flex flex-col gap-3 w-full" onSubmit={onSubmit}>
           <TextField

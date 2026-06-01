@@ -21,6 +21,7 @@ const Register: Component = () => {
 
   const [email, setEmail] = createSignal("")
   const [password, setPassword] = createSignal("")
+  const [confirmPassword, setConfirmPassword] = createSignal("")
   const [nickname, setNickname] = createSignal("")
   const [submitting, setSubmitting] = createSignal(false)
   const [errorMessage, setErrorMessage] = createSignal<string | null>(null)
@@ -33,6 +34,11 @@ const Register: Component = () => {
     event.preventDefault()
     if (submitting()) return
     setErrorMessage(null)
+    // 密码二次确认：两次输入必须一致
+    if (password() !== confirmPassword()) {
+      setErrorMessage(language.t("auth.register.passwordMismatch"))
+      return
+    }
     setSubmitting(true)
     try {
       await auth.signUp({
@@ -59,12 +65,9 @@ const Register: Component = () => {
       {/* 同 login.tsx：注册页无 Titlebar，补顶部可拖动区。 */}
       <div data-tauri-drag-region class="absolute top-0 left-0 right-0 h-10" />
       <div class="w-full max-w-sm flex flex-col items-center justify-center gap-6 px-6">
-        {/* PunkcodeAI 文字 logo（替换原 opencode 矢量字 logo）：mono 字体呼应原像素/geek 风 */}
-        <div class="font-mono text-3xl font-bold tracking-tight text-text-strong select-none shrink-0">
+        {/* PunkcodeAI 文字 logo：霓虹流光动效。下方"注册"标题已移除（底部有注册按钮）。 */}
+        <div class="punkcode-logo font-mono text-4xl font-bold tracking-tight select-none shrink-0">
           {PRODUCT_NAME}
-        </div>
-        <div class="flex flex-col items-center gap-1 text-center">
-          <h1 class="text-lg font-medium text-text-strong">{language.t("auth.register.title")}</h1>
         </div>
         <form class="flex flex-col gap-3 w-full" onSubmit={onSubmit}>
           <TextField
@@ -86,9 +89,18 @@ const Register: Component = () => {
             disabled={submitting()}
           />
           <TextField
+            label={language.t("auth.register.confirmPassword")}
+            type="password"
+            autocomplete="new-password"
+            required
+            value={confirmPassword()}
+            onChange={(value) => setConfirmPassword(value)}
+            disabled={submitting()}
+          />
+          <TextField
             label={language.t("auth.register.nickname")}
             type="text"
-            autocomplete="nickname"
+            autocomplete="name"
             required
             value={nickname()}
             onChange={(value) => setNickname(value)}

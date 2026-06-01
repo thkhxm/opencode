@@ -98,6 +98,34 @@ a {
 }
 
 /*
+  PunkcodeAI 登录/注册页文字 logo 的霓虹流光动效（赛博朋克 punk 风）。
+  渐变在文字上缓慢横向流动，呼应品牌名里的 "punk"。
+*/
+@keyframes punkcode-logo-shimmer {
+  0%,
+  100% {
+    background-position: 0% center;
+  }
+  50% {
+    background-position: 100% center;
+  }
+}
+.punkcode-logo {
+  background-image: linear-gradient(90deg, #d946ef, #22d3ee, #8b5cf6, #d946ef);
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: punkcode-logo-shimmer 4s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .punkcode-logo {
+    animation: none;
+  }
+}
+
+/*
   Add the correct font weight in Edge and Safari.
 */
 
