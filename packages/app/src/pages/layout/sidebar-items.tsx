@@ -2,11 +2,12 @@ import type { Session } from "@opencode-ai/sdk/v2/client"
 import { Avatar } from "@opencode-ai/ui/avatar"
 import { Icon } from "@opencode-ai/ui/icon"
 import { IconButton } from "@opencode-ai/ui/icon-button"
+import { DropdownMenu } from "@opencode-ai/ui/dropdown-menu"
 import { Spinner } from "@opencode-ai/ui/spinner"
 import { Tooltip } from "@opencode-ai/ui/tooltip"
 import { getFilename } from "@opencode-ai/core/util/path"
 import { A, useParams } from "@solidjs/router"
-import { type Accessor, createMemo, For, type JSX, Match, Show, Switch } from "solid-js"
+import { type Accessor, createMemo, createSignal, For, type JSX, Match, Show, Switch } from "solid-js"
 import { useServerSync } from "@/context/server-sync"
 import { useLanguage } from "@/context/language"
 import { getAvatarColors, type LocalProject, useLayout } from "@/context/layout"
@@ -84,6 +85,7 @@ export type SessionItemProps = {
   clearHoverProjectSoon: () => void
   prefetchSession: (session: Session, priority?: "high" | "low") => void
   archiveSession: (session: Session) => Promise<void>
+  deleteSession: (session: Session) => void
 }
 
 const SessionRow = (props: {
@@ -147,6 +149,8 @@ export const SessionItem = (props: SessionItemProps): JSX.Element => {
   const notification = useNotification()
   const permission = usePermission()
   const serverSync = useServerSync()
+  // #2：操作菜单（Archive/Delete）开关。打开时强制保留操作区可见（否则 hover 区会收起）。
+  const [menuOpen, setMenuOpen] = createSignal(false)
   const unseenCount = createMemo(() => notification.session.unseenCount(props.session.id))
   const hasError = createMemo(() => notification.session.unseenHasError(props.session.id))
   const [sessionStore] = serverSync.child(props.session.directory)
@@ -235,25 +239,49 @@ export const SessionItem = (props: SessionItemProps): JSX.Element => {
             <div
               class="shrink-0 overflow-hidden transition-[width,opacity]"
               classList={{
-                "w-6 opacity-100 pointer-events-auto": !!props.mobile,
-                "w-0 opacity-0 pointer-events-none": !props.mobile,
+                "w-6 opacity-100 pointer-events-auto": !!props.mobile || menuOpen(),
+                "w-0 opacity-0 pointer-events-none": !props.mobile && !menuOpen(),
                 "group-hover/session:w-6 group-hover/session:opacity-100 group-hover/session:pointer-events-auto": true,
                 "group-focus-within/session:w-6 group-focus-within/session:opacity-100 group-focus-within/session:pointer-events-auto": true,
               }}
             >
-              <Tooltip value={language.t("common.archive")} placement="top">
-                <IconButton
-                  icon="archive"
+              {/* #2：会话项操作菜单（Archive + Delete）。
+                  原来只有 archive 单按钮、没有删除入口，导致用户「会话无法删除」。 */}
+              <DropdownMenu gutter={4} placement="bottom-end" open={menuOpen()} onOpenChange={setMenuOpen}>
+                <DropdownMenu.Trigger
+                  as={IconButton}
+                  icon="dot-grid"
                   variant="ghost"
-                  class="size-6 rounded-md"
-                  aria-label={language.t("common.archive")}
-                  onClick={(event) => {
+                  class="size-6 rounded-md data-[expanded]:bg-surface-base-active"
+                  aria-label={language.t("common.moreOptions")}
+                  aria-expanded={menuOpen()}
+                  onClick={(event: MouseEvent) => {
                     event.preventDefault()
                     event.stopPropagation()
-                    void props.archiveSession(props.session)
                   }}
                 />
-              </Tooltip>
+                <DropdownMenu.Portal>
+                  <DropdownMenu.Content style={{ "min-width": "104px" }}>
+                    <DropdownMenu.Item
+                      onSelect={() => {
+                        setMenuOpen(false)
+                        void props.archiveSession(props.session)
+                      }}
+                    >
+                      <DropdownMenu.ItemLabel>{language.t("common.archive")}</DropdownMenu.ItemLabel>
+                    </DropdownMenu.Item>
+                    <DropdownMenu.Separator />
+                    <DropdownMenu.Item
+                      onSelect={() => {
+                        setMenuOpen(false)
+                        props.deleteSession(props.session)
+                      }}
+                    >
+                      <DropdownMenu.ItemLabel>{language.t("common.delete")}</DropdownMenu.ItemLabel>
+                    </DropdownMenu.Item>
+                  </DropdownMenu.Content>
+                </DropdownMenu.Portal>
+              </DropdownMenu>
             </div>
           </Show>
         </div>

@@ -88,6 +88,7 @@ import {
 } from "./layout/sidebar-workspace"
 import { ProjectDragOverlay, SortableProject, type ProjectSidebarContext } from "./layout/sidebar-project"
 import { HIDE_PROVIDER_UI } from "@/branding"
+import { sessionTitle } from "@/utils/session-title"
 import { SidebarContent } from "./layout/sidebar-shell"
 import { BalanceWidget } from "@/components/balance-widget"
 
@@ -998,6 +999,94 @@ export default function Layout(props: ParentProps) {
       }
     }
   }
+
+  // #2：从左侧会话列表永久删除会话（含其所有子会话）。
+  // 区别于 archiveSession（仅打 archived 标记、会话还在 db）——这里调 session.delete
+  // 真删 db 行。会话可能分属不同 directory，所以 delete 显式带 directory（与 archive 一致）。
+  async function deleteSession(session: Session) {
+    const [store, setStore] = serverSync.child(session.directory)
+    const sessions = store.session ?? []
+    const index = sessions.findIndex((s) => s.id === session.id)
+    const nextSession = sessions[index + 1] ?? sessions[index - 1]
+
+    const ok = await serverSDK.client.session
+      .delete({ directory: session.directory, sessionID: session.id })
+      .then((x) => x.data)
+      .catch((err) => {
+        showToast({
+          title: language.t("session.delete.failed.title"),
+          description: errorMessage(err, language.t("common.requestFailed")),
+        })
+        return false
+      })
+    if (!ok) return
+
+    // 连带删除该会话的所有后代子会话（与 session/message-timeline.tsx 的删除逻辑一致）。
+    const removed = new Set<string>([session.id])
+    const byParent = new Map<string, string[]>()
+    for (const item of sessions) {
+      if (!item.parentID) continue
+      const existing = byParent.get(item.parentID)
+      if (existing) existing.push(item.id)
+      else byParent.set(item.parentID, [item.id])
+    }
+    const stack = [session.id]
+    while (stack.length) {
+      const parentID = stack.pop()
+      if (!parentID) continue
+      const children = byParent.get(parentID)
+      if (!children) continue
+      for (const child of children) {
+        if (removed.has(child)) continue
+        removed.add(child)
+        stack.push(child)
+      }
+    }
+
+    setStore(
+      produce((draft) => {
+        draft.session = draft.session.filter((s) => !removed.has(s.id))
+      }),
+    )
+
+    if (removed.has(params.id ?? "")) {
+      if (nextSession && !removed.has(nextSession.id)) {
+        navigate(`/${params.dir}/session/${nextSession.id}`)
+      } else {
+        navigate(`/${params.dir}/session`)
+      }
+    }
+  }
+
+  // #2：删除确认弹窗。会话删除不可逆，复用 session.delete.* 文案（已全语言覆盖）。
+  function DialogDeleteSession(props: { session: Session }) {
+    const name = createMemo(() => sessionTitle(props.session.title) ?? language.t("command.session.new"))
+    const handleDelete = async () => {
+      dialog.close()
+      await deleteSession(props.session)
+    }
+    return (
+      <Dialog title={language.t("session.delete.title")} fit>
+        <div class="flex flex-col gap-4 pl-6 pr-2.5 pb-3">
+          <div class="flex flex-col gap-1">
+            <span class="text-14-regular text-text-strong">
+              {language.t("session.delete.confirm", { name: name() })}
+            </span>
+          </div>
+          <div class="flex justify-end gap-2">
+            <Button variant="ghost" size="large" onClick={() => dialog.close()}>
+              {language.t("common.cancel")}
+            </Button>
+            <Button variant="primary" size="large" onClick={handleDelete}>
+              {language.t("session.delete.button")}
+            </Button>
+          </div>
+        </div>
+      </Dialog>
+    )
+  }
+
+  const showDeleteSessionDialog = (session: Session) => dialog.show(() => <DialogDeleteSession session={session} />)
 
   command.register("layout", () => {
     const commands: CommandOption[] = [
@@ -1991,6 +2080,7 @@ export default function Layout(props: ParentProps) {
     clearHoverProjectSoon,
     prefetchSession,
     archiveSession,
+    deleteSession: showDeleteSessionDialog,
     workspaceName,
     renameWorkspace,
     editorOpen,
@@ -2037,6 +2127,7 @@ export default function Layout(props: ParentProps) {
       clearHoverProjectSoon,
       prefetchSession,
       archiveSession,
+      deleteSession: showDeleteSessionDialog,
     },
   }
 
