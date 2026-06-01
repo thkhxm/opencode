@@ -28,7 +28,17 @@ import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist"
 // （本身不含 worker 代码，体积可忽略）。在 Electron renderer（Chromium）里 pdfjs 内部 new Worker(url)
 // 能正常加载该 .mjs（vite worker.format='es' + target esnext）。不依赖 CDN / 本机命令行工具。
 import PdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url"
-import { MAX_SHEET_ROWS, clampText, needsExtraction, rowsToCsv, utf8ToBase64 } from "./extract-util"
+import {
+  MAX_PDF_RENDER_PAGES,
+  MAX_SHEET_ROWS,
+  PDF_RENDER_MAX_DIM,
+  clampText,
+  needsExtraction,
+  pickRenderDim,
+  rowsToCsv,
+  sampleEvenly,
+  utf8ToBase64,
+} from "./extract-util"
 
 // 转出 needsExtraction，让调用方（attachments.ts）只从 extract.ts 一处引入提取相关 API。
 export { needsExtraction }
@@ -64,13 +74,6 @@ export type ExtractResult = {
   notices: string[]
 }
 
-/** 单个 PDF 一次最多渲染的页数（含图 PDF 走 vision 时）。超出提示分批。
- *  注意：每页图 ≈ 1500~2500 视觉 token，100 页可能占用 ~20 万 token，叠加正文文字后
- *  会逼近 272k context 上限；含图很多的大 PDF 仍建议分批，渲染时会 toast 提示页数。 */
-const MAX_PDF_RENDER_PAGES = 100
-
-/** PDF 渲染缩放后短边目标上限（px）。再大交给 sidecar photon 进一步压。 */
-const PDF_RENDER_MAX_DIM = 1600
 /** PDF 渲染 JPEG 质量。 */
 const PDF_RENDER_JPEG_QUALITY = 0.8
 
@@ -124,12 +127,12 @@ async function pageHasBitmapImage(page: PDFPageProxy, OPS: PdfjsModule["OPS"]): 
   }
 }
 
-async function renderPdfPageToJpeg(doc: PDFDocumentProxy, pageNumber: number): Promise<string | null> {
+async function renderPdfPageToJpeg(doc: PDFDocumentProxy, pageNumber: number, maxDim: number): Promise<string | null> {
   try {
     const page = await doc.getPage(pageNumber)
     const baseViewport = page.getViewport({ scale: 1 })
     const longest = Math.max(baseViewport.width, baseViewport.height)
-    const scale = longest > PDF_RENDER_MAX_DIM ? PDF_RENDER_MAX_DIM / longest : 1
+    const scale = longest > maxDim ? maxDim / longest : 1
     const viewport = page.getViewport({ scale })
     const canvas = document.createElement("canvas")
     canvas.width = Math.max(1, Math.floor(viewport.width))
@@ -185,18 +188,25 @@ async function extractPdf(file: File): Promise<ExtractResult> {
     }
 
     // 含图页（扫描件 / 图文混排的插图图表）渲染成 vision 图，让模型用视觉读图。
+    // 方案 A：超出单次容量时【不再要求用户手动分批】，而是均匀抽样覆盖全文 + 自适应降低
+    // 分辨率，让任意大小 / 任意含图量的 PDF 都能在工具内单次处理掉，用户无感。
     if (pagesToRender.length > 0) {
-      let pages = pagesToRender
-      if (pages.length > MAX_PDF_RENDER_PAGES) {
+      const candidates = pagesToRender
+      let pages = candidates
+      if (candidates.length > MAX_PDF_RENDER_PAGES) {
+        // 均匀抽样到上限，覆盖整个文档（而非只看前 N 页），不让用户去拆分 PDF。
+        pages = sampleEvenly(candidates, MAX_PDF_RENDER_PAGES)
         notices.push(
-          `${file.name}：含图页 ${pages.length} 页超过单次 ${MAX_PDF_RENDER_PAGES} 页上限，仅渲染前 ${MAX_PDF_RENDER_PAGES} 页图像，其余请分批上传。`,
+          `${file.name}：含图页 ${candidates.length} 页，已自动均匀抽取 ${pages.length} 页代表性页面覆盖全文（单页分辨率自适应降低；需要某页细节可在对话中指明页码）。`,
         )
-        pages = pages.slice(0, MAX_PDF_RENDER_PAGES)
-      } else {
-        notices.push(`${file.name}：含图 / 图表页 ${pages.length} 页已一并渲染为图像供模型识别（会增加 token 用量）。`)
+      }
+      // 含图页越多分辨率越低，把整本 PDF 的图压进单次 token 预算。
+      const dim = pickRenderDim(pages.length)
+      if (candidates.length <= MAX_PDF_RENDER_PAGES && dim < PDF_RENDER_MAX_DIM) {
+        notices.push(`${file.name}：含图 ${pages.length} 页，已按 ${dim}px 自适应分辨率渲染以适配单次容量。`)
       }
       for (const pageNumber of pages) {
-        const dataUrl = await renderPdfPageToJpeg(doc, pageNumber)
+        const dataUrl = await renderPdfPageToJpeg(doc, pageNumber, dim)
         if (dataUrl) {
           attachments.push({
             kind: "image",

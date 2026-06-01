@@ -1,11 +1,14 @@
 import { describe, expect, test } from "bun:test"
 import {
+  MAX_PDF_RENDER_PAGES,
   MAX_TEXT_BYTES,
   byteLength,
   clampText,
   csvCell,
   needsExtraction,
+  pickRenderDim,
   rowsToCsv,
+  sampleEvenly,
   utf8ToBase64,
 } from "./extract-util"
 
@@ -73,5 +76,49 @@ describe("needsExtraction", () => {
   test("does not match images / text", () => {
     expect(needsExtraction("image/png")).toBe(false)
     expect(needsExtraction("text/plain")).toBe(false)
+  })
+})
+
+describe("sampleEvenly", () => {
+  const range = (n: number) => Array.from({ length: n }, (_, i) => i + 1)
+
+  test("returns input unchanged when within target", () => {
+    expect(sampleEvenly([1, 2, 3], 5)).toEqual([1, 2, 3])
+    expect(sampleEvenly([], 5)).toEqual([])
+  })
+
+  test("samples down to exactly target length", () => {
+    expect(sampleEvenly(range(300), MAX_PDF_RENDER_PAGES)).toHaveLength(MAX_PDF_RENDER_PAGES)
+    expect(sampleEvenly(range(1000), 100)).toHaveLength(100)
+  })
+
+  test("keeps ascending order and starts from the first page", () => {
+    const out = sampleEvenly(range(300), 100)
+    expect(out[0]).toBe(1)
+    for (let i = 1; i < out.length; i++) expect(out[i]!).toBeGreaterThan(out[i - 1]!)
+  })
+
+  test("spreads across the whole document, not just the head", () => {
+    const out = sampleEvenly(range(300), 100)
+    // 末个抽样页应接近文档尾部（覆盖全文），而不是停在前 100 页。
+    expect(out[out.length - 1]!).toBeGreaterThan(250)
+  })
+
+  test("returns empty for non-positive target", () => {
+    expect(sampleEvenly(range(10), 0)).toEqual([])
+    expect(sampleEvenly(range(10), -1)).toEqual([])
+  })
+})
+
+describe("pickRenderDim", () => {
+  test("scales resolution down as page count grows", () => {
+    expect(pickRenderDim(1)).toBe(1600)
+    expect(pickRenderDim(30)).toBe(1600)
+    expect(pickRenderDim(31)).toBe(1100)
+    expect(pickRenderDim(60)).toBe(1100)
+    expect(pickRenderDim(61)).toBe(800)
+    expect(pickRenderDim(90)).toBe(800)
+    expect(pickRenderDim(91)).toBe(600)
+    expect(pickRenderDim(100)).toBe(600)
   })
 })

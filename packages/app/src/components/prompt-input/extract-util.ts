@@ -73,3 +73,34 @@ export function needsExtraction(mime: string): boolean {
     mime === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
   )
 }
+
+/** 单个 PDF 一次最多渲染的页数。超出不再要求用户手动分批，而是 sampleEvenly 均匀抽样到这个数覆盖全文。 */
+export const MAX_PDF_RENDER_PAGES = 100
+
+/** 单页渲染的最高短边分辨率（px）。少量图时用它，页多时按 pickRenderDim 降档。 */
+export const PDF_RENDER_MAX_DIM = 1600
+
+/**
+ * 按"实际要渲染的含图页数"自适应选单页短边分辨率（px）：页越多分辨率越低，把整本 PDF
+ * 的图压进单次 272k context 的 token 预算内（每页图 token 随分辨率平方下降）。这样含图
+ * 特别多的大 PDF 也能单次覆盖全文，不需要用户手动拆分分批（方案 A：智能降采样自适应）。
+ */
+export function pickRenderDim(pageCount: number): number {
+  if (pageCount <= 30) return PDF_RENDER_MAX_DIM // 高清：少量图，正常阅读分辨率
+  if (pageCount <= 60) return 1100
+  if (pageCount <= 90) return 800
+  return 600 // 大量图：低清但仍可辨认图表趋势 / 版面 / 大字
+}
+
+/**
+ * 从候选页里均匀抽样 target 页（保持升序、均匀分布在整个文档而非只取前半），
+ * 保证"覆盖全文"而不是"只看开头"。pages.length ≤ target 时原样返回。
+ */
+export function sampleEvenly(pages: number[], target: number): number[] {
+  if (target <= 0) return []
+  if (pages.length <= target) return pages
+  const out: number[] = []
+  const step = pages.length / target
+  for (let i = 0; i < target; i++) out.push(pages[Math.floor(i * step)]!)
+  return out
+}
