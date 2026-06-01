@@ -279,7 +279,10 @@ async function applyPunkcodeCredentials(credentials: SetCredentialsCommand["cred
     //    每个模型尽量给完整 cost/limit/capabilities 字段，避免 Provider.transform 走 NaN 分支。
     const models: Record<string, unknown> = {}
     for (const model of credentials.models) {
-      const ctx = typeof model.context_window === "number" && model.context_window > 0 ? model.context_window : 200_000
+      // context_window 由 sub2api /cli/llm 上报（gpt-5=272000 等）。缺失/为 0（如图片生成模型）时
+      // 回退 128_000——与后端 contextWindowForCliModel 的 default 对齐，且取保守值，避免重现旧坑
+      // （fallback 比真实容量大 → 误判"能塞更多" → context_length_exceeded）。
+      const ctx = typeof model.context_window === "number" && model.context_window > 0 ? model.context_window : 128_000
       models[model.id] = {
         id: model.id,
         name: model.name,

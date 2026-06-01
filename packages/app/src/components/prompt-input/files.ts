@@ -74,7 +74,8 @@ export async function attachmentMime(file: File) {
   const suffix = ext(file.name)
   // docx / xlsx：浏览器/系统给的 type 经常是空 / octet-stream / 误判，按扩展名兜底识别真实 mime。
   const officeFallback = OFFICE_EXTS.get(suffix)
-  if (officeFallback && (!type || type === "application/octet-stream" || OFFICE_MIMES.has(type))) {
+  // 注：office mime 已在上方提前 return，这里只处理 type 为空 / octet-stream / 误判的情况。
+  if (officeFallback && (!type || type === "application/octet-stream")) {
     return officeFallback
   }
   const fallback = IMAGE_EXTS.get(suffix) ?? (suffix === "pdf" ? "application/pdf" : undefined)

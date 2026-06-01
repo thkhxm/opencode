@@ -45,6 +45,9 @@ export function clampText(text: string, label: string, notices: string[]): strin
     if (byteLength(text.slice(0, mid)) <= MAX_TEXT_BYTES) lo = mid
     else hi = mid - 1
   }
+  // 若截断点正好落在 surrogate pair 中间（末位是孤立高位代理项），回退 1 位，
+  // 避免 slice 产生孤立代理项被编码成替换字符（影响 emoji 等星形面字符）。
+  if (lo > 0 && text.charCodeAt(lo - 1) >= 0xd800 && text.charCodeAt(lo - 1) <= 0xdbff) lo--
   notices.push(
     `${label}：内容过大已截断到约 ${Math.round(MAX_TEXT_BYTES / 1024)}KB（避免超出模型上下文）。如需完整分析请拆分文件。`,
   )
