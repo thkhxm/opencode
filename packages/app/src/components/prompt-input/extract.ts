@@ -64,8 +64,10 @@ export type ExtractResult = {
   notices: string[]
 }
 
-/** 单个 PDF 一次最多渲染的页数（含图 PDF 走 vision 时）。超出提示分批。 */
-const MAX_PDF_RENDER_PAGES = 25
+/** 单个 PDF 一次最多渲染的页数（含图 PDF 走 vision 时）。超出提示分批。
+ *  注意：每页图 ≈ 1500~2500 视觉 token，100 页可能占用 ~20 万 token，叠加正文文字后
+ *  会逼近 272k context 上限；含图很多的大 PDF 仍建议分批，渲染时会 toast 提示页数。 */
+const MAX_PDF_RENDER_PAGES = 100
 
 /** PDF 渲染缩放后短边目标上限（px）。再大交给 sidecar photon 进一步压。 */
 const PDF_RENDER_MAX_DIM = 1600

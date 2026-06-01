@@ -72,12 +72,18 @@ export function createPromptAttachments(input: PromptAttachmentsInput) {
         if (toast && notices.length === 0) warn()
         return false
       }
+      // 同一源文件提取出的所有 part 共享一个 groupId，UI 据此折叠成一个文件 chip
+      // （否则 20 页含图 PDF 会在附件区炸出 20+ 个缩略图）；发送时仍逐个展开。
+      const groupId = uuid()
       const parts: ImageAttachmentPart[] = attachments.map((item) => ({
         type: "image",
         id: uuid(),
         filename: item.filename,
         mime: item.mime,
         dataUrl: item.dataUrl,
+        groupId,
+        sourceName: file.name,
+        sourceMime: mime,
       }))
       const cursor = prompt.cursor() ?? getCursorPosition(editor)
       prompt.set([...prompt.current(), ...parts], cursor)
@@ -115,7 +121,15 @@ export function createPromptAttachments(input: PromptAttachmentsInput) {
 
   const removeAttachment = (id: string) => {
     const current = prompt.current()
-    const next = current.filter((part) => part.type !== "image" || part.id !== id)
+    // 若被删 part 属于某个源文件分组（PDF/docx/xlsx 提取产物），连带删除整组；
+    // 否则只删该单个附件。
+    const target = current.find((part) => part.type === "image" && part.id === id) as ImageAttachmentPart | undefined
+    const groupId = target?.groupId
+    const next = current.filter((part) => {
+      if (part.type !== "image") return true
+      if (groupId) return part.groupId !== groupId
+      return part.id !== id
+    })
     prompt.set(next, prompt.cursor())
   }
 

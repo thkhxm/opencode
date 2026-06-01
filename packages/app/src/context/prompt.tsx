@@ -33,6 +33,14 @@ export interface ImageAttachmentPart {
   filename: string
   mime: string
   dataUrl: string
+  /** 同一个拖入文件（PDF / docx / xlsx）本地提取出的多个 part 共享的分组 ID。
+   *  UI 把同组多 part 折叠成一个"源文件"chip（避免 20 页 PDF 炸出 20 个缩略图），
+   *  但发送时仍逐个展开为 part 发给模型。普通图片附件无此字段。 */
+  groupId?: string
+  /** 源文件展示名（如 report.pdf）。分组代表 chip 显示它而非单页文件名。 */
+  sourceName?: string
+  /** 源文件 mime（如 application/pdf）。预留给图标/类型展示。 */
+  sourceMime?: string
 }
 
 export type ContentPart = TextPart | FileAttachmentPart | AgentPart | ImageAttachmentPart
