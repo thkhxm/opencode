@@ -2,6 +2,7 @@ import { createStore, reconcile } from "solid-js/store"
 import { createEffect, createMemo } from "solid-js"
 import { createSimpleContext } from "@opencode-ai/ui/context"
 import { persisted } from "@/utils/persist"
+import { FORCE_STABLE_LAYOUT } from "@/branding"
 
 export interface NotificationSettings {
   agent: boolean
@@ -55,7 +56,12 @@ export interface Settings {
 export const monoDefault = "System Mono"
 export const sansDefault = "System Sans"
 export const terminalDefault = "JetBrainsMono Nerd Font Mono"
-export const newLayoutDesignsDefault = import.meta.env.VITE_OPENCODE_CHANNEL !== "prod"
+// #4：PunkcodeAI 强制走稳定经典布局（FORCE_STABLE_LAYOUT），否则桌面端因为 renderer 没
+// 注入 VITE_OPENCODE_CHANNEL，newLayoutDesigns 恒默认 true，跑进未完成的 V2 布局导致
+// 「打开会话后左侧项目栏 + 右侧信息栏都没有」。详见 branding.ts FORCE_STABLE_LAYOUT 注释。
+export const newLayoutDesignsDefault = FORCE_STABLE_LAYOUT
+  ? false
+  : import.meta.env.VITE_OPENCODE_CHANNEL !== "prod"
 
 const monoFallback =
   'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace'

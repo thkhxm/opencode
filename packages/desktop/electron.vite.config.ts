@@ -94,6 +94,10 @@ export default defineConfig({
       // renderer 端 branding.ts -> DEFAULT_API_BASE_URL 读这个；dev 指向本地 sub2api。
       "import.meta.env.PUNKCODE_API_BASE_URL": JSON.stringify(punkcodeApiBaseUrl),
       "import.meta.env.PUNKCODE_UPDATE_FEED_URL": JSON.stringify(punkcodeUpdateFeedUrl),
+      // renderer 的 app 代码（settings.tsx newLayoutDesignsDefault、titlebar channel 角标）
+      // 读 VITE_OPENCODE_CHANNEL。之前没注入恒为 undefined，导致 newLayoutDesignsDefault
+      // 恒为 true（跑进 V2 实验布局，左右栏丢失，见 #4）。这里按解析出的 channel 注入对齐。
+      "import.meta.env.VITE_OPENCODE_CHANNEL": JSON.stringify(channel),
     },
     plugins: [appPlugin, sentry],
     publicDir: "../../../app/public",

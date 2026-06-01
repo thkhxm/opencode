@@ -43,3 +43,25 @@ export const ISSUE_TRACKER_URL = "https://github.com/thkhxm/opencode/issues"
  * 模型下拉本身保留，让用户能切换模型。M6 接 `/cli/llm` 后下拉会显示真实模型列表。
  */
 export const HIDE_PROVIDER_UI = true
+
+/**
+ * 是否强制使用 opencode 的「稳定经典布局」，关闭实验性 V2 新布局（newLayoutDesigns）。
+ *
+ * 背景（#4 打开会话后左右栏都不见了）：
+ *   upstream opencode 有一套实验性「new layout designs」(V2)，由 settings.general.
+ *   newLayoutDesigns 控制，默认值 = `VITE_OPENCODE_CHANNEL !== "prod"`。
+ *   桌面端 renderer 构建（electron.vite.config.ts）并未注入 VITE_OPENCODE_CHANNEL，
+ *   所以它恒为 undefined → 默认值恒为 true → 桌面端默认跑 V2 布局。
+ *
+ *   而 V2 布局在 layout.tsx 里走的是「只渲染 <main>、不渲染左侧 project/session
+ *   sidebar nav」的分支，且 session-header 把 search/fileTree/terminal/status 也
+ *   默认关掉——表现就是「打开会话后左侧项目栏 + 右侧信息栏都没有」。V2 是上游未完成的
+ *   实验设计，不适合作为 PunkcodeAI 产品默认。
+ *
+ *   因此 PunkcodeAI 桌面端强制用稳定经典布局：左侧项目/会话 sidebar + 右侧 review/
+ *   file-tree 面板都正常渲染。该开关把 newLayoutDesigns 的默认值钉死为 false。
+ *
+ * 注：新建会话空状态页因此走经典 NewSessionView（小号 Mark logo，已在 #1 一并脱敏成
+ * PunkcodeAI 文字 logo），不再是 V2 的 opencode 大像素 wordmark 水印。
+ */
+export const FORCE_STABLE_LAYOUT = true
