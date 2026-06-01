@@ -354,7 +354,14 @@ export const createDirSyncContext = (directory: string, serverSync: ReturnType<t
         })
       })
       .catch((error) => {
-        if (isNotFound(error) && !tracked(input.directory, input.sessionID)) return
+        // session 在当前 db 不存在（404）：可能被删、账号切换导致 db 变更、或初始加载竞态。
+        // 一律优雅清理本地引用并忽略，绝不 throw——否则会经上层 Promise.all 冒泡成
+        // fatal renderer error 把整个桌面端崩掉（曾因账号 db 隔离后旧 session 引用失效而崩溃）。
+        if (isNotFound(error)) {
+          seen.get(input.directory)?.delete(input.sessionID)
+          clearMeta(input.directory, [input.sessionID])
+          return
+        }
         throw error
       })
       .finally(() => {
@@ -486,7 +493,12 @@ export const createDirSyncContext = (directory: string, serverSync: ReturnType<t
                     )
                   })
                   .catch((error) => {
-                    if (isNotFound(error) && !tracked(directory, sessionID)) return
+                    // 同 loadMessages：session 不存在（404）一律优雅清理并忽略，不 throw 成 fatal。
+                    if (isNotFound(error)) {
+                      seen.get(directory)?.delete(sessionID)
+                      clearMeta(directory, [sessionID])
+                      return
+                    }
                     throw error
                   })
 
