@@ -314,10 +314,28 @@ const applySession = (next: AuthState, options?: { persist?: boolean }) => {
   }
   scheduleRefresh(next)
 
-  // M9（session 按账号隔离）：renderer 已经在反映另一个账号的 session/project 内存态时，
-  // 切到新账号必须整窗 reload，否则会看到上一账号的会话列表。
-  // 首次进入登录态（renderedAccountID === null，如冷启动 bootstrap / 干净 login）不 reload。
-  if (renderedAccountID !== null && renderedAccountID !== next.accountID) {
+  // M9（session 按账号隔离 / #5 假列表修复）：
+  //   renderer 进程的 server-sync / session 列表内存态是在「sidecar 切到本账号隔离 db 之前」
+  //   就对着【默认/上一账号 db】bootstrap 出来的。账号确定（sidecar 已 respawn 到本账号 db）后，
+  //   必须让 renderer 基于【当前 db】重新同步，否则会出现 #5："列表里有一堆旧会话，点开却是空"
+  //   ——列表是切 db 前残留的内存态，session.messages 打到的是切 db 后的空 db。
+  //
+  //   修法：整窗 reload。reload 后 ensureBootstrap 重跑，server-sync 对着（已是本账号 db 的）
+  //   sidecar 重新 bootstrap + session.list，拿到的就是本账号 db 的真实会话（admin 隔离 db 为空 → 列表为空，诚实）。
+  //   局部 invalidate 容易漏 children store / sdk cache / query cache / prefetch，reload 是零残留的可靠做法。
+  //
+  //   防无限 reload（最高优先级）：用 sessionStorage 记「当前 renderer DOM 实例已为哪个 accountID 同步过」。
+  //   sessionStorage 跨 `location.reload()` 存活、随窗口销毁而清空——正好满足：
+  //     - reload 前把 marker 写成 next.accountID；reload 后 bootstrapInner 重跑 applySession 时
+  //       读到 marker === next.accountID → 判定「本实例已为该账号同步」→ 不再 reload（终止循环）。
+  //     - 整 app 重启（窗口销毁）→ sessionStorage 清空 → 下次冷启动会为账号 reload 一次（预期：要把
+  //       默认 db 上 bootstrap 的内存态换成账号 db 的）。
+  //   登录态不丢：reload 前 writePersisted 已落 refresh_token，reload 后 bootstrapInner 用它自动恢复登录态。
+  const synced = getSyncedAccountID()
+  if (synced !== next.accountID) {
+    // DOM 当前同步的账号 ≠ 目标账号（含冷启动 marker 缺失：DOM 是对着默认 db bootstrap 的）→ reload 一次。
+    setSyncedAccountID(next.accountID)
+    renderedAccountID = next.accountID
     reloadRenderer()
     return
   }
@@ -338,8 +356,42 @@ const clearSession = () => {
  * - 用 `location.reload()` 把整个 renderer 重置：reload 后 ensureBootstrap 重跑，
  *   server-sync 重新对着（已切换到新账号 db 的）sidecar bootstrap，拿到新账号自己的 session 列表，
  *   彻底杜绝"看到上一账号会话"。这是最可靠、零残留的做法（局部 invalidate 容易漏 children store / sdk cache）。
+ *
+ * 注意：本变量是模块级，`location.reload()` 后会重置为 null；真正跨 reload 存活的「已同步账号」
+ * 记号在 sessionStorage（见 getSyncedAccountID / setSyncedAccountID），用于防无限 reload。
  */
 let renderedAccountID: string | null = null
+
+/**
+ * 跨 `location.reload()` 存活的「当前 renderer DOM 实例已为哪个 accountID 同步过」记号。
+ *
+ * - 存 sessionStorage：跨 reload 存活、随窗口销毁清空，正好契合「reload 一次后不再 reload」的语义。
+ * - 用途：applySession 据此判断「DOM 是否已对着本账号 db bootstrap 过」，是防无限 reload 的关键。
+ */
+const SYNCED_ACCOUNT_KEY = "punkcodeai.synced.accountID"
+
+function getSyncedAccountID(): string | null {
+  if (typeof sessionStorage === "undefined") return renderedAccountID
+  try {
+    return sessionStorage.getItem(SYNCED_ACCOUNT_KEY)
+  } catch {
+    // 隐私模式 / quota：退回到模块级内存值（同一 DOM 实例内仍能防住「同一账号反复 reload」）。
+    return renderedAccountID
+  }
+}
+
+function setSyncedAccountID(accountID: string | null): void {
+  if (typeof sessionStorage === "undefined") return
+  try {
+    if (accountID === null) {
+      sessionStorage.removeItem(SYNCED_ACCOUNT_KEY)
+      return
+    }
+    sessionStorage.setItem(SYNCED_ACCOUNT_KEY, accountID)
+  } catch {
+    // 隐私模式 / quota：忽略；模块级 renderedAccountID 仍兜底同一 DOM 实例内的防抖。
+  }
+}
 
 /** reload 整个 renderer 窗口（非浏览器环境 no-op）。用于账号切换后强制清空内存态。 */
 function reloadRenderer(): void {
@@ -872,6 +924,10 @@ export const useAuth = () => ({
   async signOut(): Promise<void> {
     clearSession()
     renderedAccountID = null
+    // 清掉「已同步账号」记号：reload 后 DOM 会重新对着默认 db bootstrap（已无凭据），
+    // 下次登录（同/异账号）时 applySession 必定判定「需为该账号同步」→ reload 一次绑到账号 db，
+    // 避免登出再登录后又看到上一账号残留列表。
+    setSyncedAccountID(null)
     await clearCredentialsOnSidecar()
     reloadRenderer()
   },

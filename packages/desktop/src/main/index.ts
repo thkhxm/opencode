@@ -422,6 +422,27 @@ const main = Effect.gen(function* () {
       // 此时 sidecar 已 ready，立刻把内存中的最新凭据推过去。
       if (pendingPunkcodeCredentials) {
         const creds = pendingPunkcodeCredentials
+        const wantPath = accountDataPathFor(creds.accountID || undefined)
+        // #5 pending race 修复：renderer 在【初始 spawn（默认 db，accountDataPath=undefined）】完成前
+        //   就 push 了带 accountID 的凭据时，旧实现把凭据灌进默认 db 并把 currentSidecarAccountID 设为该账号，
+        //   导致「currentSidecarAccountID=admin 但 db 仍是默认共享 db」——后续 setCredentials 再也不会
+        //   respawn（因为 accountID 没变），admin 就一直用错 db（看到/写入共享 db 而非自己的隔离 db）。
+        //   修法：本次 spawn 用的目录(accountDataPath)若与该账号【应当】使用的目录(wantPath)不一致，
+        //   说明这是「装错 db」的局部状态——改为 respawn 到正确账号目录（respawn 内部会重新走 doSpawn
+        //   并在路径已对齐时把凭据灌进去），而不是把凭据灌进错的 db。
+        //   注意：respawnSidecar 此时一定已注册（它在 doSpawn 定义之后、首个 doSpawn 调用之前赋值）。
+        if (wantPath !== accountDataPath && creds.accountID && respawnSidecar) {
+          writeLog("utility", "initial credentials carry account needing isolated db, respawning", {
+            account: creds.accountID,
+          })
+          // 不在这里 await respawn 的健康（避免和外层首个 doSpawn 的 health.wait 嵌套）：
+          // 触发 respawn 即可，respawnSidecar 内部会停掉本进程并用正确目录重起、灌凭据、设 currentSidecarAccountID。
+          // 用 void + catch 兜底，失败仅记日志，不阻塞首屏（renderer 会随 db 变化在下次 push/refresh 自愈）。
+          void respawnSidecar(wantPath).catch((e) =>
+            writeLog("utility", "respawn for pending account credentials failed", { error: String(e) }, "error"),
+          )
+          return health
+        }
         try {
           await listener.setCredentials(creds)
           if (creds.accountID) currentSidecarAccountID = creds.accountID
@@ -434,11 +455,16 @@ const main = Effect.gen(function* () {
 
     // M9：注册 respawn 回调供切账号时调用——先停掉当前 sidecar，再用新账号目录起一个。
     // respawn 后不需要重新等 health（renderer 会自己重连），但仍 await 一下健康检查避免立刻打挂。
+    // respawn 完成后把 currentSidecarAccountID 对齐到本次目标账号——避免 #5 pending race 触发的 respawn
+    // 之后 currentSidecarAccountID 仍停留在错误值，导致同账号再次 push 时误判而又 respawn。
     respawnSidecar = async (accountDataPath: string | undefined) => {
       const previous = server
       server = null
       if (previous) await previous.stop()
       const health = await doSpawn(accountDataPath)
+      // doSpawn 在「目录已对齐」分支里会把 pending 凭据灌进去并设好 currentSidecarAccountID；
+      // 这里再兜底对齐一次，覆盖 pending 凭据为空（纯切目录）等边界。
+      if (pendingPunkcodeCredentials?.accountID) currentSidecarAccountID = pendingPunkcodeCredentials.accountID
       await Promise.race([health.wait, new Promise<void>((resolve) => setTimeout(resolve, 30_000))])
     }
 
