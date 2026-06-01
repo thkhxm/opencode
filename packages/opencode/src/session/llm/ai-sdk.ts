@@ -204,6 +204,12 @@ export function toLLMEvents(
 
     case "tool-result":
       return Effect.sync(() => {
+        // 跳过 preliminary（流式中间态）tool-result：AI SDK 对 provider-executed 工具
+        // （如 image_generation）会先推若干 partial_image 的 preliminary 结果，再推最终结果。
+        // opencode 的 tool part 只表示「最终输出」，且 completeToolCall 是一次性的
+        // （首个 running→completed 后续 no-op）。若不滤掉 preliminary，会被中间态（低清/局部）
+        // 图抢先 complete，最终全清图反而被丢。这里只放行最终结果，保持现有非流式语义不变。
+        if ("preliminary" in event && event.preliminary === true) return []
         const name = state.toolNames[event.toolCallId] ?? "unknown"
         delete state.toolNames[event.toolCallId]
         return [

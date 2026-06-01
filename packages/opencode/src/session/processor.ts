@@ -279,9 +279,47 @@ export const layer = Layer.effect(
 
       const isFilePart = (value: unknown): value is MessageV2.FilePart => Schema.is(MessageV2.FilePart)(value)
 
+      // 把模型 provider 端执行的 image_generation 结果（base64 PNG）转成可渲染的 FilePart。
+      //
+      // 背景：codex /responses 协议下，sub2api image_generation bridge 生成的图片由
+      // @ai-sdk/openai 以「image_generation 的 provider-executed tool-result」形式返回，
+      // 形如 { result: "<base64>" }（裸 base64，无 data: 前缀），而不是 file stream part。
+      // 若不特殊处理，这段 base64 只会被 JSON.stringify 进 tool 输出文本，UI 无法显示成图。
+      // 这里把它包成 FilePart 走 attachments 通道：下游 tool-result 分支会对 image/* 附件做
+      // image.normalize（限尺寸）并落成 file part，命中 M10 的 assistant file part 内联渲染。
+      const imageGenerationAttachment = (
+        value: Extract<StreamEvent, { type: "tool-result" }>,
+      ): MessageV2.FilePart | undefined => {
+        if (value.name !== "image_generation") return undefined
+        const raw = value.result.value
+        const b64 = isRecord(raw) && typeof raw.result === "string" ? raw.result : undefined
+        if (!b64) return undefined
+        // OpenAI image_generation 默认返回 PNG 的裸 base64；兼容已带 data: 前缀的情况。
+        const url = b64.startsWith("data:") ? b64 : `data:image/png;base64,${b64}`
+        return {
+          id: PartID.ascending(),
+          messageID: ctx.assistantMessage.id,
+          sessionID: ctx.assistantMessage.sessionID,
+          type: "file",
+          mime: "image/png",
+          filename: `${value.id}.png`,
+          url,
+        }
+      }
+
       const toolResultOutput = (
         value: Extract<StreamEvent, { type: "tool-result" }>,
       ): { title: string; metadata: Record<string, any>; output: string; attachments?: MessageV2.FilePart[] } => {
+        const generatedImage = imageGenerationAttachment(value)
+        if (generatedImage) {
+          return {
+            title: value.name,
+            // 不把 base64 塞进 metadata（会撑爆 part），只标记产物类型。
+            metadata: { generated: "image", mime: generatedImage.mime },
+            output: "Generated image.",
+            attachments: [generatedImage],
+          }
+        }
         if (isRecord(value.result.value) && typeof value.result.value.output === "string") {
           return {
             title: typeof value.result.value.title === "string" ? value.result.value.title : value.name,
@@ -498,6 +536,24 @@ export const layer = Layer.effect(
               })
             }
             yield* completeToolCall(value.id, output)
+
+            // image_generation：把（已 normalize 的）生成图额外落成 assistant 的独立 file part，
+            // 让 UI 的 PART_MAPPING["file"] 内联渲染成图（tool part 的 state.attachments 只用于
+            // 把图回灌给模型做多轮上下文，UI 不渲染它）。仅对 image_generation 生效，不影响其它工具。
+            if (value.name === "image_generation") {
+              for (const attachment of attachments) {
+                if (!attachment.mime.startsWith("image/")) continue
+                yield* session.updatePart({
+                  id: PartID.ascending(),
+                  messageID: ctx.assistantMessage.id,
+                  sessionID: ctx.assistantMessage.sessionID,
+                  type: "file",
+                  mime: attachment.mime,
+                  filename: attachment.filename,
+                  url: attachment.url,
+                })
+              }
+            }
             return
           }
 
