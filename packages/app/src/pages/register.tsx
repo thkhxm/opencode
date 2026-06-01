@@ -10,7 +10,6 @@ import { Component, createEffect, createSignal, Show } from "solid-js"
 import { useNavigate } from "@solidjs/router"
 import { Button } from "@opencode-ai/ui/button"
 import { TextField } from "@opencode-ai/ui/text-field"
-import { Logo } from "@opencode-ai/ui/logo"
 import { useLanguage } from "@/context/language"
 import { AccountError, CredentialsError, useAuth } from "@/stores/auth"
 import { PRODUCT_NAME } from "@/branding"
@@ -60,10 +59,12 @@ const Register: Component = () => {
       {/* 同 login.tsx：注册页无 Titlebar，补顶部可拖动区。 */}
       <div data-tauri-drag-region class="absolute top-0 left-0 right-0 h-10" />
       <div class="w-full max-w-sm flex flex-col items-center justify-center gap-6 px-6">
-        <Logo class="w-40 opacity-60 shrink-0" />
+        {/* PunkcodeAI 文字 logo（替换原 opencode 矢量字 logo）：mono 字体呼应原像素/geek 风 */}
+        <div class="font-mono text-3xl font-bold tracking-tight text-text-strong select-none shrink-0">
+          {PRODUCT_NAME}
+        </div>
         <div class="flex flex-col items-center gap-1 text-center">
           <h1 class="text-lg font-medium text-text-strong">{language.t("auth.register.title")}</h1>
-          <p class="text-sm text-text-weak">{PRODUCT_NAME}</p>
         </div>
         <form class="flex flex-col gap-3 w-full" onSubmit={onSubmit}>
           <TextField
