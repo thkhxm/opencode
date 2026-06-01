@@ -206,6 +206,19 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
         },
         options: { headerTimeout: OPENAI_HEADER_TIMEOUT_DEFAULT },
       }),
+    // PunkcodeAI（sub2api 桌面端内置 provider）：与 openai 走同样的 /responses 协议（sdk.responses），
+    // 这样 sub2api 的 image_generation bridge 才会在 /v1/responses 上注入图片生成工具并真出图。
+    // provider 由桌面端 sidecar 通过 OPENCODE_CONFIG_CONTENT 注入（npm: @ai-sdk/openai + baseURL 指向
+    // sub2api），codex 识别头由内置 punkcode 插件的 chat.headers 注入。store:false 已由
+    // transform.ts options() 对 @ai-sdk/openai 自动处理，从而不发 previous_response_id。
+    punkcodeai: () =>
+      Effect.succeed({
+        autoload: false,
+        async getModel(sdk: any, modelID: string, _options?: Record<string, any>) {
+          return sdk.responses(modelID)
+        },
+        options: { headerTimeout: OPENAI_HEADER_TIMEOUT_DEFAULT },
+      }),
     xai: () =>
       Effect.succeed({
         autoload: false,

@@ -275,7 +275,16 @@ async function applyPunkcodeCredentials(credentials: SetCredentialsCommand["cred
     })
 
     // 2) OPENCODE_CONFIG_CONTENT：注入 punkcodeai provider 定义 + 模型列表。
-    //    npm 用 @ai-sdk/openai-compatible（sub2api 后端兼容 OpenAI Chat Completions 协议）。
+    //    npm 用 @ai-sdk/openai（codex /responses 协议），而非 @ai-sdk/openai-compatible
+    //    （后者走 /v1/chat/completions）。理由：sub2api 的 image_generation bridge 只在
+    //    【/responses 协议 + codex 识别头(originator/UA 以 codex 开头)】时才注入图片生成工具并真出图。
+    //    走 @ai-sdk/openai 后：
+    //      - provider.ts 的 custom() punkcodeai 分支用 sdk.responses(id) → 命中 /v1/responses；
+    //      - provider/transform.ts options() 对 npm==="@ai-sdk/openai" 自动设 store:false →
+    //        既匹配 codex CLI 行为，又保证【不发 previous_response_id】（SDK 只在显式传
+    //        previousResponseId 时才发，opencode 从不传），规避 sub2api openai_gateway 对
+    //        非 WSv2 请求带 previous_response_id 直接 400 的坑；
+    //      - codex 识别头由内置 punkcode 插件的 chat.headers hook 注入（见 plugin/punkcode.ts）。
     //    每个模型尽量给完整 cost/limit/capabilities 字段，避免 Provider.transform 走 NaN 分支。
     const models: Record<string, unknown> = {}
     for (const model of credentials.models) {
@@ -289,12 +298,14 @@ async function applyPunkcodeCredentials(credentials: SetCredentialsCommand["cred
         // 计费在 sub2api 网关侧统一结算，cost 字段对桌面端只起 UI 提示作用，全部置 0 即可。
         cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
         limit: { context: ctx, output: Math.min(ctx, 8192) },
-        modalities: { input: ["text", "image"], output: ["text"] },
+        // output 放开 image：sub2api bridge 通过 responses 协议的 image_generation_call 返回真图，
+        // 桌面端按 image_generation 工具结果（base64 PNG）渲染。
+        modalities: { input: ["text", "image"], output: ["text", "image"] },
         attachment: true,
         reasoning: false,
         temperature: true,
         tool_call: true,
-        provider: { npm: "@ai-sdk/openai-compatible", api: credentials.baseUrl },
+        provider: { npm: "@ai-sdk/openai", api: credentials.baseUrl },
       }
     }
     process.env.OPENCODE_CONFIG_CONTENT = JSON.stringify({
@@ -304,9 +315,11 @@ async function applyPunkcodeCredentials(credentials: SetCredentialsCommand["cred
       provider: {
         [PUNKCODE_PROVIDER_ID]: {
           name: "PunkcodeAI",
-          npm: "@ai-sdk/openai-compatible",
+          npm: "@ai-sdk/openai",
           api: credentials.baseUrl,
           options: {
+            // @ai-sdk/openai 默认打 https://api.openai.com/v1；显式 baseURL 指回 sub2api 的 <baseUrl>/v1，
+            // 鉴权保持 sk-key（Authorization: Bearer sk-...，sub2api ApiKeyAuth 认得），不切 OAuth。
             baseURL: credentials.baseUrl,
             apiKey: credentials.apiKey,
           },

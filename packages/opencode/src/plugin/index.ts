@@ -11,6 +11,7 @@ import * as Log from "@opencode-ai/core/util/log"
 import { createOpencodeClient } from "@opencode-ai/sdk"
 import { ServerAuth } from "@/server/auth"
 import { CodexAuthPlugin } from "./openai/codex"
+import { PunkcodeAuthPlugin } from "./punkcode"
 import { Session } from "@/session/session"
 import { NamedError } from "@opencode-ai/core/util/error"
 import { CopilotAuthPlugin } from "./github-copilot/copilot"
@@ -78,6 +79,8 @@ function internalPlugins(flags: RuntimeFlags.Info): PluginInstance[] {
     AzureAuthPlugin,
     DigitalOceanAuthPlugin,
     XaiAuthPlugin,
+    // PunkcodeAI（sub2api 桌面端 provider）：注入 codex 识别头触发 image_generation bridge。
+    PunkcodeAuthPlugin,
   ]
 }
 
