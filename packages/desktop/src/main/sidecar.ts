@@ -335,7 +335,13 @@ async function applyPunkcodeCredentials(credentials: SetCredentialsCommand["cred
         provider: { npm: "@ai-sdk/openai", api: credentials.baseUrl },
       }
     }
-    process.env.OPENCODE_CONFIG_CONTENT = JSON.stringify({
+    // imagegen skill 发现：主进程把 imagegen skill 目录的绝对路径放进 PUNKCODE_SKILLS_DIR
+    //（dev 指向 D:/project/sub2api/skills/imagegen，打包指向 resources/skills/imagegen）。
+    // 这里把它拼进 config 的 skills.paths——opencode 的 discoverSkills 会对该路径用
+    // `**/SKILL.md` 扫描，从而发现并加载 imagegen skill（强 description 让模型在编程上下文也主动调它）。
+    // env 缺失时不注入 skills 字段，优雅降级（不影响其它功能）。
+    const skillsDir = process.env.PUNKCODE_SKILLS_DIR
+    const config: Record<string, unknown> = {
       // 限定只允许 punkcodeai——避免 shell 里残留的 OPENAI_API_KEY / ANTHROPIC_API_KEY 等
       // 通过 env 自动连上原生 provider，污染模型下拉。
       enabled_providers: [PUNKCODE_PROVIDER_ID],
@@ -353,7 +359,22 @@ async function applyPunkcodeCredentials(credentials: SetCredentialsCommand["cred
           models,
         },
       },
-    })
+    }
+    if (skillsDir && skillsDir.length > 0) {
+      config.skills = { paths: [skillsDir] }
+    }
+    process.env.OPENCODE_CONFIG_CONTENT = JSON.stringify(config)
+
+    // 3) OPENAI_API_KEY / OPENAI_BASE_URL：给 imagegen skill 的 scripts/image_gen.py 用。
+    //    背景：桌面端 sk-key 只在本进程 env 的 OPENCODE_AUTH_CONTENT / OPENCODE_CONFIG_CONTENT 里，
+    //    image_gen.py 的凭据发现顺序（① OPENAI_API_KEY env → ② opencode.json 文件 → ③ auth.json 文件）
+    //    的 ②③ 都读「磁盘配置文件」，拿不到桌面端的 env-only 凭据。所以这里走 ① 直接注入 env。
+    //    shell/bash 工具 spawn 子进程时会 spread 整个 process.env（见 tool/shell.ts shellEnv），
+    //    image_gen.py 作为 bash 子进程自然继承到这两个 env。
+    //    baseUrl 来自 /cli/llm 的 base_url，已含 /v1（如 http://host:38080/v1）；OpenAI SDK 会拼成
+    //    <OPENAI_BASE_URL>/images/generations → <baseUrl>/v1/images/generations，命中 sub2api 端点。
+    process.env.OPENAI_API_KEY = credentials.apiKey
+    process.env.OPENAI_BASE_URL = credentials.baseUrl
 
     await reloadProviderState()
   } catch (error) {
@@ -367,6 +388,9 @@ async function clearPunkcodeCredentials(): Promise<void> {
   try {
     delete process.env.OPENCODE_AUTH_CONTENT
     delete process.env.OPENCODE_CONFIG_CONTENT
+    // 退出登录 / 切换账号时也清掉 imagegen skill 用的 env 凭据，杜绝上一账号 key 残留。
+    delete process.env.OPENAI_API_KEY
+    delete process.env.OPENAI_BASE_URL
     await reloadProviderState()
   } catch (error) {
     console.warn("failed to clear PunkcodeAI credentials", error)

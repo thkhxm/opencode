@@ -537,10 +537,19 @@ export const layer = Layer.effect(
             }
             yield* completeToolCall(value.id, output)
 
-            // image_generation：把（已 normalize 的）生成图额外落成 assistant 的独立 file part，
+            // 把（已 normalize 的）图片附件额外落成 assistant 的独立 file part，
             // 让 UI 的 PART_MAPPING["file"] 内联渲染成图（tool part 的 state.attachments 只用于
-            // 把图回灌给模型做多轮上下文，UI 不渲染它）。仅对 image_generation 生效，不影响其它工具。
-            if (value.name === "image_generation") {
+            // 把图回灌给模型做多轮上下文，UI 不渲染它）。
+            //
+            // 两类来源会触发内联渲染：
+            //   1. image_generation：provider 端执行的图片生成工具（codex /responses bridge 返回 base64 PNG）。
+            //   2. read 工具读到的图片（mime image/*）：imagegen skill 走 bash 跑 image_gen.py 把图落到本地 PNG，
+            //      模型随后用 read 工具读这张 PNG。read 的图片附件原本只进 tool part 的 state.attachments
+            //      （UI 只显示文件名、不显示图），这里扩展到 read+image/* 也内联渲染，让 skill 出图能在桌面端可见。
+            const shouldRenderInline =
+              value.name === "image_generation" ||
+              (value.name === "read" && attachments.some((a) => a.mime.startsWith("image/")))
+            if (shouldRenderInline) {
               for (const attachment of attachments) {
                 if (!attachment.mime.startsWith("image/")) continue
                 yield* session.updatePart({
@@ -549,7 +558,9 @@ export const layer = Layer.effect(
                   sessionID: ctx.assistantMessage.sessionID,
                   type: "file",
                   mime: attachment.mime,
-                  filename: attachment.filename,
+                  // read 的图片附件没有 filename（read.ts 只产 { type, mime, url }），给个稳定回退名，
+                  // 避免 UI 文件 part 显示空文件名。
+                  filename: attachment.filename ?? `image.${attachment.mime.split("/")[1] ?? "png"}`,
                   url: attachment.url,
                 })
               }

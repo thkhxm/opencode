@@ -196,6 +196,20 @@ const main = Effect.gen(function* () {
 
   process.env.OPENCODE_DISABLE_EMBEDDED_WEB_UI = "true"
 
+  // imagegen skill 目录：让 sidecar 把它拼进 OPENCODE_CONFIG_CONTENT 的 skills.paths，
+  // opencode 据此用 `**/SKILL.md` 扫描发现该 skill（见 skill/index.ts discoverSkills）。
+  //   - 打包：随 extraResources 拷到 resources/skills/imagegen（见 electron-builder.config.ts）。
+  //   - dev：sub2api 仓库与 opencode 仓库同级（D:/project/ 下），直接指向其内的 skills/imagegen 绝对路径。
+  // sidecar 是 utilityProcess、拿不到 electron 的 `app`，故在主进程算好绝对路径，
+  // 通过 process.env.PUNKCODE_SKILLS_DIR 传给 sidecar（createSidecarEnv 会 spread 整个 process.env）。
+  // env 缺失时 sidecar 不注入 skills（优雅降级）。
+  const skillsDir = app.isPackaged
+    ? join(process.resourcesPath, "skills", "imagegen")
+    : "D:/project/sub2api/skills/imagegen"
+  if (existsSync(skillsDir)) {
+    process.env.PUNKCODE_SKILLS_DIR = skillsDir
+  }
+
   const appId = app.isPackaged ? APP_IDS[CHANNEL] : "site.myverse.punkcodeai.dev"
   const onboardingTestRoot = ((): string | undefined => {
     if (!TEST_ONBOARDING) return

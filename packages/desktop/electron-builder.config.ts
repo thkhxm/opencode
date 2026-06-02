@@ -52,6 +52,13 @@ const getBase = (): Configuration => ({
       to: "native/",
       filter: ["index.js", "index.d.ts", "build/Release/mac_window.node", "swift-build/**"],
     },
+    {
+      // imagegen skill：打包后随 app 拷到 resources/skills/imagegen，
+      // 主进程在 app.isPackaged 时用 join(process.resourcesPath, "skills", "imagegen") 找它（见 main/index.ts）。
+      // from 相对本配置文件（packages/desktop）：../../.. = D:/project，再进 sub2api/skills/imagegen。
+      from: "../../../sub2api/skills/imagegen",
+      to: "skills/imagegen",
+    },
   ],
   mac: {
     category: "public.app-category.developer-tools",
