@@ -98,6 +98,13 @@ const getBase = (): Configuration => ({
     installerHeaderIcon: `resources/icons/icon.ico`,
     shortcutName: "PunkcodeAI",
   },
+  portable: {
+    // nsis 安装器沿用 base 的 artifactName(PunkcodeAI-${os}-${arch}.${ext})并据此生成 latest.yml。
+    // portable 必须用不同文件名，否则与 nsis 同名互相覆盖：后构建的 portable 会盖掉 nsis，
+    // 导致 latest.yml 记录的 sha512/size（nsis 的）与磁盘上的实际文件（portable 的）失配，
+    // electron-updater 下载后 sha512 校验失败、自动更新坏掉。
+    artifactName: "PunkcodeAI-${os}-${arch}-portable.${ext}",
+  },
   linux: {
     // TODO M9: replace with PunkcodeAI logo when user provides
     icon: `resources/icons`,
