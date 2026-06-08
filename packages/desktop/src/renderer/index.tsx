@@ -194,6 +194,20 @@ const createPlatform = (): Platform => {
       return window.api.openPath(path, app)
     },
 
+    async revealPath(path: string) {
+      if (os === "windows") {
+        const resolvedPath = await (async () => {
+          if (await isWslEnabled()) {
+            const converted = await window.api.wslPath(path, "windows").catch(() => null)
+            if (converted) return converted
+          }
+          return path
+        })()
+        return window.api.revealPath(resolvedPath)
+      }
+      return window.api.revealPath(path)
+    },
+
     back() {
       window.history.back()
     },
@@ -359,6 +373,17 @@ render(() => {
     if (link?.href) {
       e.preventDefault()
       platform.openLink(link.href)
+      return
+    }
+    // Ctrl/Cmd + 点击消息里的文件路径 → 在系统文件管理器中打开其所在目录（并选中该文件）。
+    // 只在按住修饰键时触发，避免与正常的文本选择/点击冲突。
+    if (e.ctrlKey || e.metaKey) {
+      const fileEl = (e.target as HTMLElement).closest("[data-component='file-path']") as HTMLElement | null
+      const path = fileEl?.getAttribute("data-path")
+      if (path) {
+        e.preventDefault()
+        void platform.revealPath?.(path)
+      }
     }
   }
 

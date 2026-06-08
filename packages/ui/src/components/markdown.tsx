@@ -175,12 +175,94 @@ function markCodeLinks(root: HTMLDivElement) {
   }
 }
 
-function decorate(root: HTMLDivElement, labels: CopyLabels) {
+// 识别消息文本里的本地文件路径(绝对 / 项目相对)，包成可 Ctrl/Cmd+点击的 span。
+// 不用 <a href="file://">——DOMPurify 会清掉非 http/https 的 href；改用 data-path 属性，
+// 由桌面端全局点击拦截器(renderer/index.tsx handleClick)读 data-path 调 platform.revealPath。
+const FILE_PATH_RE = new RegExp(
+  "(?:" +
+    "[A-Za-z]:[\\\\/][^\\s<>\"'|?*\\n]+" + // Windows 绝对路径 C:\... 或 C:/...
+    "|/(?:[\\w.\\-]+/)+[\\w.\\-]+" + // POSIX 绝对路径 /a/b/c
+    "|\\.{1,2}/(?:[\\w.\\-]+/)*[\\w.\\-]+" + // ./ 或 ../ 相对路径
+    "|(?:[\\w.\\-]+/)+[\\w.\\-]+\\.[\\w]+" + // 带扩展名的相对路径 a/b/c.ext
+    ")(?::\\d+(?::\\d+)?)?", // 可选 :line:col 尾巴
+  "g",
+)
+
+function isAbsolutePath(p: string) {
+  return /^[A-Za-z]:[\\/]/.test(p) || p.startsWith("/")
+}
+
+function stripLineCol(p: string) {
+  return p.replace(/:\d+(?::\d+)?$/, "")
+}
+
+function joinDir(directory: string, rel: string) {
+  const sep = directory.includes("\\") && !directory.includes("/") ? "\\" : "/"
+  return `${directory.replace(/[\\/]+$/, "")}${sep}${rel.replace(/^\.\//, "")}`
+}
+
+export function markFilePaths(root: HTMLElement, directory?: string) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const el = node.parentElement
+      if (!el) return NodeFilter.FILTER_REJECT
+      const value = node.nodeValue
+      if (!value || !/[\\/]/.test(value)) return NodeFilter.FILTER_REJECT
+      // 跳过链接、已处理过的路径节点
+      if (el.closest("a, [data-component='file-path']")) return NodeFilter.FILTER_REJECT
+      // 跳过 root 内部嵌套的 pre/code(shiki 高亮结构不能破坏)；但当 root 自身就是
+      // code/pre 时(如 bash 纯文本输出)不跳过，照常识别其中的路径。
+      let cur: Element | null = el
+      while (cur && cur !== root) {
+        if (cur.tagName === "PRE" || cur.tagName === "CODE") return NodeFilter.FILTER_REJECT
+        cur = cur.parentElement
+      }
+      return NodeFilter.FILTER_ACCEPT
+    },
+  })
+  const targets: Text[] = []
+  let current: Node | null
+  while ((current = walker.nextNode())) targets.push(current as Text)
+
+  for (const textNode of targets) {
+    const text = textNode.nodeValue ?? ""
+    FILE_PATH_RE.lastIndex = 0
+    const frag = document.createDocumentFragment()
+    let lastIndex = 0
+    let matched = false
+    let match: RegExpExecArray | null
+    while ((match = FILE_PATH_RE.exec(text))) {
+      const raw = match[0]
+      // 排除 URL 的路径段(紧跟在 :// 之后)
+      if (text.slice(Math.max(0, match.index - 3), match.index).endsWith("://")) continue
+      const clean = stripLineCol(raw)
+      const abs = isAbsolutePath(clean) ? clean : directory ? joinDir(directory, clean) : null
+      // 相对路径但拿不到项目目录 → 无法解析成可打开的绝对路径，保留为纯文本
+      if (!abs) continue
+      matched = true
+      if (match.index > lastIndex) frag.appendChild(document.createTextNode(text.slice(lastIndex, match.index)))
+      const span = document.createElement("span")
+      span.setAttribute("data-component", "file-path")
+      span.setAttribute("data-path", abs)
+      span.setAttribute("data-tooltip", "Ctrl/Cmd + 点击在文件管理器中打开")
+      span.className = "file-path-link"
+      span.textContent = raw
+      frag.appendChild(span)
+      lastIndex = match.index + raw.length
+    }
+    if (!matched) continue
+    if (lastIndex < text.length) frag.appendChild(document.createTextNode(text.slice(lastIndex)))
+    textNode.parentNode?.replaceChild(frag, textNode)
+  }
+}
+
+function decorate(root: HTMLDivElement, labels: CopyLabels, directory?: string) {
   const blocks = Array.from(root.querySelectorAll("pre"))
   for (const block of blocks) {
     ensureCodeWrapper(block, labels)
   }
   markCodeLinks(root)
+  markFilePaths(root, directory)
 }
 
 function setupCodeCopy(root: HTMLDivElement, getLabels: () => CopyLabels) {
@@ -245,9 +327,11 @@ export function Markdown(
     streaming?: boolean
     class?: string
     classList?: Record<string, boolean>
+    /** 项目根目录：用于把消息文本里的相对文件路径解析成可打开的绝对路径(Ctrl/Cmd+点击) */
+    directory?: string
   },
 ) {
-  const [local, others] = splitProps(props, ["text", "cacheKey", "streaming", "class", "classList"])
+  const [local, others] = splitProps(props, ["text", "cacheKey", "streaming", "class", "classList", "directory"])
   const marked = useMarked()
   const i18n = useI18n()
   const [root, setRoot] = createSignal<HTMLDivElement>()
@@ -306,7 +390,7 @@ export function Markdown(
     }
     const temp = document.createElement("div")
     temp.innerHTML = content
-    decorate(temp, labels)
+    decorate(temp, labels, local.directory)
 
     morphdom(container, temp, {
       childrenOnly: true,

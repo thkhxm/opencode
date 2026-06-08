@@ -170,6 +170,12 @@ export function registerIpcHandlers(deps: Deps) {
     })
   })
 
+  // 在系统文件管理器中打开文件所在目录并选中该文件。
+  // 由消息里的文件路径 Ctrl/Cmd+点击触发（区别于 open-path 的“打开文件本身”）。
+  ipcMain.handle("reveal-path", (_event: IpcMainInvokeEvent, path: string) => {
+    shell.showItemInFolder(path)
+  })
+
   ipcMain.handle("read-clipboard-image", () => {
     const image = clipboard.readImage()
     if (image.isEmpty()) return null

@@ -264,3 +264,17 @@
   text-decoration: underline;
   text-underline-offset: 2px;
 }
+
+/* 文件路径：Ctrl/Cmd + 点击在系统文件管理器中打开所在目录(识别逻辑见 markdown.tsx 的 markFilePaths)。
+   全局选择器(不限 markdown 容器)，使 bash 输出 <pre><code> 里的路径也应用此样式。 */
+.file-path-link {
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+  text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
+}
+
+.file-path-link:hover {
+  text-decoration-style: solid;
+  color: var(--text-interactive-base, currentColor);
+}

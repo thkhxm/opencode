@@ -43,7 +43,7 @@ import { Icon } from "./icon"
 import { ToolErrorCard } from "./tool-error-card"
 import { Checkbox } from "./checkbox"
 import { DiffChanges } from "./diff-changes"
-import { Markdown } from "./markdown"
+import { Markdown, markFilePaths } from "./markdown"
 import { ImagePreview } from "./image-preview"
 import { getDirectory as _getDirectory, getFilename } from "@opencode-ai/core/util/path"
 import { checksum } from "@opencode-ai/core/util/encode"
@@ -261,7 +261,7 @@ function createPacedValue(getValue: () => string, live?: () => boolean) {
   return value
 }
 
-function PacedMarkdown(props: { text: string; cacheKey: string; streaming: boolean }) {
+function PacedMarkdown(props: { text: string; cacheKey: string; streaming: boolean; directory?: string }) {
   const value = createPacedValue(
     () => props.text,
     () => props.streaming,
@@ -269,7 +269,7 @@ function PacedMarkdown(props: { text: string; cacheKey: string; streaming: boole
 
   return (
     <Show when={value()}>
-      <Markdown text={value()} cacheKey={props.cacheKey} streaming={props.streaming} />
+      <Markdown text={value()} cacheKey={props.cacheKey} streaming={props.streaming} directory={props.directory} />
     </Show>
   )
 }
@@ -1546,8 +1546,11 @@ PART_MAPPING["text"] = function TextPartDisplay(props) {
     <Show when={text()}>
       <div data-component="text-part" data-timeline-part-id={part().id}>
         <div data-slot="text-part-body">
-          <Show when={streaming()} fallback={<Markdown text={text()} cacheKey={part().id} streaming={false} />}>
-            <PacedMarkdown text={text()} cacheKey={part().id} streaming={streaming()} />
+          <Show
+            when={streaming()}
+            fallback={<Markdown text={text()} cacheKey={part().id} streaming={false} directory={data.directory} />}
+          >
+            <PacedMarkdown text={text()} cacheKey={part().id} streaming={streaming()} directory={data.directory} />
           </Show>
         </div>
         <Show when={showCopy()}>
@@ -1645,8 +1648,11 @@ PART_MAPPING["reasoning"] = function ReasoningPartDisplay(props) {
   return (
     <Show when={text()}>
       <div data-component="reasoning-part" data-timeline-part-id={part().id}>
-        <Show when={streaming()} fallback={<Markdown text={text()} cacheKey={part().id} streaming={false} />}>
-          <PacedMarkdown text={text()} cacheKey={part().id} streaming={streaming()} />
+        <Show
+          when={streaming()}
+          fallback={<Markdown text={text()} cacheKey={part().id} streaming={false} directory={data.directory} />}
+        >
+          <PacedMarkdown text={text()} cacheKey={part().id} streaming={streaming()} directory={data.directory} />
         </Show>
       </div>
     </Show>
@@ -1697,6 +1703,7 @@ ToolRegistry.register({
   name: "list",
   render(props) {
     const i18n = useI18n()
+    const data = useData()
     return (
       <BasicTool
         {...props}
@@ -1705,7 +1712,7 @@ ToolRegistry.register({
       >
         <Show when={props.output}>
           <div data-component="tool-output" data-scrollable>
-            <Markdown text={props.output!} />
+            <Markdown text={props.output!} directory={data.directory} />
           </div>
         </Show>
       </BasicTool>
@@ -1717,6 +1724,7 @@ ToolRegistry.register({
   name: "glob",
   render(props) {
     const i18n = useI18n()
+    const data = useData()
     return (
       <BasicTool
         {...props}
@@ -1729,7 +1737,7 @@ ToolRegistry.register({
       >
         <Show when={props.output}>
           <div data-component="tool-output" data-scrollable>
-            <Markdown text={props.output!} />
+            <Markdown text={props.output!} directory={data.directory} />
           </div>
         </Show>
       </BasicTool>
@@ -1741,6 +1749,7 @@ ToolRegistry.register({
   name: "grep",
   render(props) {
     const i18n = useI18n()
+    const data = useData()
     const args: string[] = []
     if (props.input.pattern) args.push("pattern=" + props.input.pattern)
     if (props.input.include) args.push("include=" + props.input.include)
@@ -1756,7 +1765,7 @@ ToolRegistry.register({
       >
         <Show when={props.output}>
           <div data-component="tool-output" data-scrollable>
-            <Markdown text={props.output!} />
+            <Markdown text={props.output!} directory={data.directory} />
           </div>
         </Show>
       </BasicTool>
@@ -1943,6 +1952,18 @@ ToolRegistry.register({
       }
     }
 
+    // bash 输出是纯文本 <pre>(不走 markdown)。用 ref + createEffect 手动写入文本并装饰其中的
+    // 文件路径(如 "Wrote output/imagegen/x.png")，避免 SolidJS 的 {text()} 插值在更新时把装饰的
+    // span 覆盖掉。markFilePaths 在 root 自身是 code 时会照常识别(见其 acceptNode 的 root 相对判断)。
+    const data = useData()
+    let codeEl: HTMLElement | undefined
+    createEffect(() => {
+      const value = text()
+      if (!codeEl) return
+      codeEl.textContent = value
+      markFilePaths(codeEl, data.directory)
+    })
+
     return (
       <BasicTool
         {...props}
@@ -1979,7 +2000,7 @@ ToolRegistry.register({
           </div>
           <div data-slot="bash-scroll" data-scrollable>
             <pre data-slot="bash-pre">
-              <code>{text()}</code>
+              <code ref={(el) => (codeEl = el)} />
             </pre>
           </div>
         </div>
