@@ -65,6 +65,7 @@ import { DebugBar } from "@/components/debug-bar"
 import { Titlebar, type TitlebarUpdate } from "@/components/titlebar"
 import { useServer } from "@/context/server"
 import { useLanguage, type Locale } from "@/context/language"
+import { useAuth } from "@/stores/auth"
 import { pathKey } from "@/utils/path-key"
 import {
   displayName,
@@ -131,6 +132,7 @@ export default function Layout(props: ParentProps) {
   const command = useCommand()
   const theme = useTheme()
   const language = useLanguage()
+  const auth = useAuth()
   const newDesign = createMemo(() => settings.general.newLayoutDesigns())
   const initialDirectory = decode64(params.dir)
   const location = useLocation()
@@ -2435,6 +2437,34 @@ export default function Layout(props: ParentProps) {
                 </div>
               </div>
             </div>
+          </div>
+        </Show>
+
+        {/* PunkcodeAI: 会话界面 sidebar 左下角账户入口（查看账户信息 + 退出登录）。
+            桌面端原本只有 home 页有账户入口、会话界面缺失，这里补上；登录态下才显示。 */}
+        <Show when={auth.isLoggedIn()}>
+          <div
+            data-component="sidebar-account"
+            class="shrink-0 mt-auto px-3 pt-2 pb-3 flex flex-col gap-0.5 border-t border-border-weaker-base"
+          >
+            <button
+              type="button"
+              class="flex items-center min-w-0 px-2 py-1.5 rounded-md text-12-regular text-text-base hover:bg-surface-base"
+              onClick={() => navigate("/account")}
+              title={language.t("account.title")}
+            >
+              <span class="truncate">{auth.state()?.user.email ?? language.t("account.title")}</span>
+            </button>
+            <button
+              type="button"
+              class="flex items-center min-w-0 px-2 py-1.5 rounded-md text-12-regular text-text-weak hover:bg-surface-base"
+              onClick={async () => {
+                await auth.signOut()
+                navigate("/login", { replace: true })
+              }}
+            >
+              <span class="truncate">{language.t("account.logout")}</span>
+            </button>
           </div>
         </Show>
       </div>

@@ -204,18 +204,11 @@ function TimelineDiffSummaryRow(props: {
       data-component="session-turn-diffs-group"
       data-show-all={showAll() || undefined}
     >
-      <div data-slot="session-turn-diffs-header">
-        <span data-slot="session-turn-diffs-label">
-          {props.diffs.length} {language.t("ui.sessionTurn.diffs.changed")}{" "}
-          {language.t(props.diffs.length === 1 ? "ui.common.file.one" : "ui.common.file.other")}
-        </span>
-        <DiffChanges changes={props.diffs} />
-        <Show when={overflow() > 0}>
-          <span data-slot="session-turn-diffs-toggle" onClick={() => setState("showAll", !showAll())}>
-            {showAll() ? language.t("ui.sessionTurn.diffs.showLess") : language.t("ui.sessionTurn.diffs.showAll")}
-          </span>
-        </Show>
-      </div>
+      {/* PunkcodeAI: 移除整个「N Changed 个文件 +/-」diff 汇总 header（用户多次反馈无必要，
+          桌面端非 IDE）。这里是桌面对话视图真正渲染该汇总的组件(TimelineDiffSummaryRow)，
+          之前误改的 ui/session-turn.tsx 是 app 包未引用的死代码故无效。保留下方
+          session-turn-diffs-content 的文件折叠预览 / 图片缩略图；超过 maxFiles 时由
+          content 内的 more 按钮展开。 */}
       <div data-component="session-turn-diffs-content">
         <Accordion
           multiple
