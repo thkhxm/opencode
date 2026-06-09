@@ -244,7 +244,7 @@ export function markFilePaths(root: HTMLElement, directory?: string) {
       const span = document.createElement("span")
       span.setAttribute("data-component", "file-path")
       span.setAttribute("data-path", abs)
-      span.setAttribute("data-tooltip", "Ctrl/Cmd + 点击在文件管理器中打开")
+      span.setAttribute("title", "点击在文件管理器中打开 · Ctrl/Cmd+点击打开文件本身")
       span.className = "file-path-link"
       span.textContent = raw
       frag.appendChild(span)
@@ -253,6 +253,27 @@ export function markFilePaths(root: HTMLElement, directory?: string) {
     if (!matched) continue
     if (lastIndex < text.length) frag.appendChild(document.createTextNode(text.slice(lastIndex)))
     textNode.parentNode?.replaceChild(frag, textNode)
+  }
+
+  // inline code 里的整段路径也要可点：模型按惯例(SKILL.md "report the saved path")用反引号包
+  // 路径，marked 渲成 <code>…path…</code>。上面的 TreeWalker 因 acceptNode 跳过 PRE/CODE 内文本，
+  // 不会处理它们 —— 这正是“反引号路径点不动”的主因。这里专门给“整段恰好是一个路径”的 inline
+  // code 元素挂上 file-path 标记(不拆分内部文本，避免破坏 code 结构)。
+  for (const code of Array.from(root.querySelectorAll<HTMLElement>(":not(pre) > code"))) {
+    if (code.closest("a, [data-component='file-path']")) continue
+    const text = (code.textContent ?? "").trim()
+    if (!text || !/[\\/]/.test(text)) continue
+    FILE_PATH_RE.lastIndex = 0
+    const m = FILE_PATH_RE.exec(text)
+    // 必须整段 code 恰好是一个路径(前后无其它字符)，避免把“含路径的句子”误标
+    if (!m || m[0] !== text) continue
+    const clean = stripLineCol(text)
+    const abs = isAbsolutePath(clean) ? clean : directory ? joinDir(directory, clean) : null
+    if (!abs) continue
+    code.setAttribute("data-component", "file-path")
+    code.setAttribute("data-path", abs)
+    code.setAttribute("title", "点击在文件管理器中打开 · Ctrl/Cmd+点击打开文件本身")
+    code.classList.add("file-path-link")
   }
 }
 

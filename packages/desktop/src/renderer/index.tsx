@@ -375,13 +375,18 @@ render(() => {
       platform.openLink(link.href)
       return
     }
-    // Ctrl/Cmd + 点击消息里的文件路径 → 在系统文件管理器中打开其所在目录（并选中该文件）。
-    // 只在按住修饰键时触发，避免与正常的文本选择/点击冲突。
-    if (e.ctrlKey || e.metaKey) {
-      const fileEl = (e.target as HTMLElement).closest("[data-component='file-path']") as HTMLElement | null
-      const path = fileEl?.getAttribute("data-path")
-      if (path) {
-        e.preventDefault()
+    // 点击消息里的文件路径：普通左键单击 → 在系统文件管理器中打开其所在目录并选中该文件；
+    // Ctrl/Cmd + 单击 → 直接打开文件本身。无需修饰键即可打开文件夹（修复反复反馈的“点不动”）。
+    const fileEl = (e.target as HTMLElement).closest("[data-component='file-path']") as HTMLElement | null
+    const path = fileEl?.getAttribute("data-path")
+    if (path) {
+      // 用户正在拖拽选择文本时(selection 非空)不要误触发打开
+      const sel = window.getSelection()
+      if (sel && !sel.isCollapsed) return
+      e.preventDefault()
+      if (e.ctrlKey || e.metaKey) {
+        void platform.openPath?.(path)
+      } else {
         void platform.revealPath?.(path)
       }
     }

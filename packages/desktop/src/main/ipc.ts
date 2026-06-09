@@ -1,4 +1,6 @@
 import { execFile } from "node:child_process"
+import { existsSync } from "node:fs"
+import { dirname } from "node:path"
 import { BrowserWindow, Notification, app, clipboard, dialog, ipcMain, shell } from "electron"
 import type { IpcMainEvent, IpcMainInvokeEvent } from "electron"
 import type { DesktopMenuAction } from "@opencode-ai/app/desktop-menu"
@@ -173,6 +175,21 @@ export function registerIpcHandlers(deps: Deps) {
   // 在系统文件管理器中打开文件所在目录并选中该文件。
   // 由消息里的文件路径 Ctrl/Cmd+点击触发（区别于 open-path 的“打开文件本身”）。
   ipcMain.handle("reveal-path", (_event: IpcMainInvokeEvent, path: string) => {
+    // showItemInFolder 对不存在的路径会静默失败。文件不存在时(相对基准不符/已删)
+    // 回退到打开其父目录，避免“点了没反应”。
+    try {
+      if (existsSync(path)) {
+        shell.showItemInFolder(path)
+        return
+      }
+      const dir = dirname(path)
+      if (existsSync(dir)) {
+        void shell.openPath(dir)
+        return
+      }
+    } catch {
+      // ignore，落到下面兜底
+    }
     shell.showItemInFolder(path)
   })
 

@@ -1,4 +1,6 @@
 import { Image } from "@/image/image"
+import { readFile } from "node:fs/promises"
+import * as path from "node:path"
 import { Cause, Deferred, Effect, Exit, Layer, Context, Scope, Schema } from "effect"
 import * as Stream from "effect/Stream"
 import { Agent } from "@/agent/agent"
@@ -27,6 +29,7 @@ import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import * as DateTime from "effect/DateTime"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { InstanceState } from "@/effect/instance-state"
 import { Usage, type LLMEvent } from "@opencode-ai/llm"
 
 const DOOM_LOOP_THRESHOLD = 3
@@ -563,6 +566,53 @@ export const layer = Layer.effect(
                   filename: attachment.filename ?? `image.${attachment.mime.split("/")[1] ?? "png"}`,
                   url: attachment.url,
                 })
+              }
+            }
+
+            // imagegen skill 走 bash 跑 image_gen.py，脚本只把图落到本地 PNG 并打印 "Wrote
+            // <path>"，不会回显图；若模型忘了用 read 回读这张 PNG，用户就只看到一行路径文本。
+            // 这里兜底：检测 bash 跑 image_gen.py 的输出，解析 Wrote 行 → 读盘 → normalize →
+            // 落成独立 file part 内联渲染，无论模型读不读都能出图。只对 image_gen.py 命令 +
+            // Wrote 图片行生效，避免误伤普通 bash 输出；只落 UI file part，不进
+            // output.attachments，保持 bash 给模型的输出语义不变。
+            if (value.name === "bash") {
+              const bashInput = (toolCall?.part.state as { input?: Record<string, unknown> } | undefined)?.input
+              const command = typeof bashInput?.command === "string" ? bashInput.command : ""
+              if (/image_gen\.py|skills[\\/]imagegen/i.test(command)) {
+                const instance = yield* InstanceState.context
+                const workdir = typeof bashInput?.workdir === "string" ? bashInput.workdir : ""
+                const cwd = workdir ? path.resolve(instance.directory, workdir) : instance.directory
+                const stdout = rawOutput.output ?? ""
+                const wroteRe = /^Wrote\s+(.+?\.(?:png|jpe?g|webp))\s*$/gim
+                const seen = new Set<string>()
+                let wrote: RegExpExecArray | null
+                while ((wrote = wroteRe.exec(stdout))) {
+                  const rawPath = wrote[1].trim()
+                  const abs = path.isAbsolute(rawPath) ? rawPath : path.resolve(cwd, rawPath)
+                  if (seen.has(abs)) continue
+                  seen.add(abs)
+                  const ext = path.extname(abs).toLowerCase()
+                  const mime = ext === ".png" ? "image/png" : ext === ".webp" ? "image/webp" : "image/jpeg"
+                  const part = yield* Effect.tryPromise(() => readFile(abs)).pipe(
+                    Effect.map(
+                      (bytes): MessageV2.FilePart => ({
+                        id: PartID.ascending(),
+                        sessionID: ctx.assistantMessage.sessionID,
+                        messageID: ctx.assistantMessage.id,
+                        type: "file",
+                        mime,
+                        filename: path.basename(abs),
+                        url: `data:${mime};base64,${Buffer.from(bytes).toString("base64")}`,
+                      }),
+                    ),
+                    Effect.flatMap((attachment) =>
+                      image.normalize(attachment).pipe(Effect.catch(() => Effect.succeed(attachment))),
+                    ),
+                    Effect.catch(() => Effect.succeed(null)),
+                  )
+                  if (!part) continue
+                  yield* session.updatePart(part)
+                }
               }
             }
             return
