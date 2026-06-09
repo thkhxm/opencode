@@ -2081,6 +2081,15 @@ ToolRegistry.register({
                 </Show>
               </div>
               <div data-slot="message-part-actions">
+                <Show when={!pending() && props.input.filePath}>
+                  <span
+                    data-component="reveal-folder"
+                    data-path={props.input.filePath}
+                    data-tooltip="在文件管理器中打开所在目录"
+                  >
+                    <IconButton icon="folder" size="small" variant="ghost" onClick={(e) => e.stopPropagation()} />
+                  </span>
+                </Show>
                 <Show when={!pending() && props.metadata.filediff}>
                   <DiffChanges changes={props.metadata.filediff} />
                 </Show>
@@ -2141,7 +2150,17 @@ ToolRegistry.register({
                   </div>
                 </Show>
               </div>
-              <div data-slot="message-part-actions">{/* <DiffChanges diff={diff} /> */}</div>
+              <div data-slot="message-part-actions">
+                <Show when={!pending() && props.input.filePath}>
+                  <span
+                    data-component="reveal-folder"
+                    data-path={props.input.filePath}
+                    data-tooltip="在文件管理器中打开所在目录"
+                  >
+                    <IconButton icon="folder" size="small" variant="ghost" onClick={(e) => e.stopPropagation()} />
+                  </span>
+                </Show>
+              </div>
             </div>
           }
         >

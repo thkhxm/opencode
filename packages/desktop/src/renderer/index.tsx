@@ -405,10 +405,24 @@ render(() => {
     return null
   }
 
+  // write/edit 工具卡片上的「打开文件夹」按钮(data-component=reveal-folder)。用 capture 阶段处理:
+  // 按钮自身 onClick 会 stopPropagation 阻止触发工具卡片折叠, 但 capture 先于 target, 故这里仍能拿到 data-path。
+  // 普通点击即触发(不需 Ctrl/Cmd), 区别于文本路径(file-path)的 Ctrl/Cmd+点击。
+  function handleRevealFolder(e: MouseEvent) {
+    const el = (e.target as HTMLElement).closest("[data-component='reveal-folder']") as HTMLElement | null
+    const path = el?.getAttribute("data-path")
+    if (path) {
+      e.preventDefault()
+      void platform.revealPath?.(path)
+    }
+  }
+
   onMount(() => {
     document.addEventListener("click", handleClick)
+    document.addEventListener("click", handleRevealFolder, true)
     onCleanup(() => {
       document.removeEventListener("click", handleClick)
+      document.removeEventListener("click", handleRevealFolder, true)
     })
   })
 

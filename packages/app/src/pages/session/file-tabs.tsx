@@ -9,6 +9,7 @@ import { createLineCommentController } from "@opencode-ai/ui/line-comment-annota
 import { sampledChecksum } from "@opencode-ai/core/util/encode"
 import { DropdownMenu } from "@opencode-ai/ui/dropdown-menu"
 import { IconButton } from "@opencode-ai/ui/icon-button"
+import { Markdown } from "@opencode-ai/ui/markdown"
 import { Tabs } from "@opencode-ai/ui/tabs"
 import { ScrollView } from "@opencode-ai/ui/scroll-view"
 import { showToast } from "@opencode-ai/ui/toast"
@@ -394,7 +395,18 @@ export function FileTabContent(props: { tab: string }) {
     scrollSync.queueRestore()
   })
 
-  const renderFile = (source: string) => (
+  const renderFile = (source: string) => {
+    const lower = (path() ?? "").toLowerCase()
+    // PunkcodeAI: md/markdown 文件预览走 Markdown 渲染(标题/列表/代码块/链接)，
+    // 而非 Pierre 带行号的源码视图(那样标题/列表都不渲染、看着像纯文本)。
+    if (lower.endsWith(".md") || lower.endsWith(".markdown")) {
+      return (
+        <div class="relative overflow-hidden pb-40 select-text" data-component="markdown-file-preview">
+          <Markdown text={source} />
+        </div>
+      )
+    }
+    return (
     <div class="relative overflow-hidden pb-40">
       <Dynamic
         component={fileComponent}
@@ -438,7 +450,8 @@ export function FileTabContent(props: { tab: string }) {
         }}
       />
     </div>
-  )
+    )
+  }
 
   return (
     <Tabs.Content value={props.tab} class="mt-3 relative h-full">

@@ -506,6 +506,19 @@
   }
 }
 
+/* PunkcodeAI: write/edit 工具卡片的「打开文件夹」按钮，默认隐藏，卡片悬浮(或按钮聚焦)时显示。 */
+[data-component="reveal-folder"] {
+  display: inline-flex;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+[data-component="write-trigger"]:hover [data-component="reveal-folder"],
+[data-component="edit-trigger"]:hover [data-component="reveal-folder"],
+[data-component="reveal-folder"]:hover,
+[data-component="reveal-folder"]:focus-within {
+  opacity: 1;
+}
+
 [data-component="edit-content"] {
   border-radius: inherit;
   border-top: 1px solid var(--border-weaker-base);

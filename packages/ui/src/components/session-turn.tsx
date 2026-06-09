@@ -449,7 +449,9 @@ export function SessionTurn(
                 </div>
               </Show>
               <SessionRetry status={status()} show={active()} />
-              <Show when={edited() > 0 && !working()}>
+              {/* PunkcodeAI: 对话框里不显示「N Changed files」diff 汇总(用户反馈无必要,桌面端非 IDE)。
+                  保留 edited()/working() 引用避免未用变量；如需恢复把 when 改回 {edited() > 0 && !working()}。 */}
+              <Show when={false && edited() > 0 && !working()}>
                 <div
                   data-slot="session-turn-diffs"
                   data-component="session-turn-diffs-group"
