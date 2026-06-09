@@ -10,7 +10,9 @@ const channel = (() => {
   const raw = process.env.PUNKCODE_CHANNEL ?? process.env.OPENCODE_CHANNEL
   if (raw === "dev" || raw === "beta" || raw === "prod") return raw
   if (raw === "latest") return "prod"
-  return "dev"
+  // 默认 prod：发布正式版是默认行为，只有显式设 PUNKCODE_CHANNEL=dev 才走开发版
+  // （避免漏设环境变量导致打出 dev 包污染用户：appId/feed/角标全错）
+  return "prod"
 })()
 
 // PunkcodeAI 后端 API base URL：dev 默认指向本地 sub2api (38080)，prod 由

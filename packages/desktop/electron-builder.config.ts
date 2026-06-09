@@ -24,7 +24,8 @@ const channel = (() => {
   // 同时兼容 OPENCODE_CHANNEL（旧）与 PUNKCODE_CHANNEL（新），优先取新名
   const raw = process.env.PUNKCODE_CHANNEL ?? process.env.OPENCODE_CHANNEL
   if (raw === "dev" || raw === "beta" || raw === "prod") return raw
-  return "dev"
+  // 默认 prod：发布正式版是默认行为，只有显式设 PUNKCODE_CHANNEL=dev 才走开发版
+  return "prod"
 })()
 
 /**

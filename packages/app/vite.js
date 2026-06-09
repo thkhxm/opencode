@@ -6,10 +6,13 @@ import { fileURLToPath } from "url"
 const theme = fileURLToPath(new URL("./public/oc-theme-preload.js", import.meta.url))
 
 const channel = (() => {
-  const raw = process.env.OPENCODE_CHANNEL
+  // 读 PUNKCODE_CHANNEL（新）兼容 OPENCODE_CHANNEL（旧），默认 prod，与 desktop 的
+  // electron.vite.config / electron-builder.config 对齐。否则此插件的 VITE_OPENCODE_CHANNEL
+  // define 会以默认 dev 覆盖 desktop 注入的 prod，导致正式版左上角误显示 DEV 角标。
+  const raw = process.env.PUNKCODE_CHANNEL ?? process.env.OPENCODE_CHANNEL
   if (raw === "dev" || raw === "beta" || raw === "prod") return raw
-  if (process.env.OPENCODE_CHANNEL === "latest") return "prod"
-  return "dev"
+  if (raw === "latest") return "prod"
+  return "prod"
 })()
 
 /**
