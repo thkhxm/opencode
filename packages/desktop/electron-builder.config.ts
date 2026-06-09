@@ -60,6 +60,13 @@ const getBase = (): Configuration => ({
       from: "../../../sub2api/skills/imagegen",
       to: "skills/imagegen",
     },
+    {
+      // engram 长期记忆资产（bin/scripts/skills）：随 app 拷到 resources/engram-data，
+      // 内置 engram 插件(opencode core)用主进程注入的 ENGRAM_DATA_DIR / ENGRAM_BIN 定位（见 main/index.ts）。
+      // 二进制各平台一份(~11MB)；macOS/Linux 由 electron-builder 保留源文件可执行位。
+      from: "../../../sub2api/engram-data",
+      to: "engram-data",
+    },
   ],
   mac: {
     category: "public.app-category.developer-tools",

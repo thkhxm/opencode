@@ -210,6 +210,30 @@ const main = Effect.gen(function* () {
     process.env.PUNKCODE_SKILLS_DIR = skillsDir
   }
 
+  // engram 长期记忆系统资产目录（bin/scripts/skills）。打包随 extraResources 拷到
+  // resources/engram-data，dev 指向 sub2api 仓库内。内置进 opencode core 的 engram 插件
+  // 读 ENGRAM_DATA_DIR 定位 scripts/skills、读 ENGRAM_BIN 定位引擎二进制；engram skill
+  // 经 PUNKCODE_ENGRAM_SKILL_DIR 拼进 skills.paths 被 discoverSkills 发现。env 经
+  // createSidecarEnv 透传给 sidecar(opencode core 进程)。缺失则优雅降级（插件自身 best-effort）。
+  const engramDataDir = app.isPackaged
+    ? join(process.resourcesPath, "engram-data")
+    : "D:/project/sub2api/engram-data"
+  if (existsSync(engramDataDir)) {
+    process.env.ENGRAM_DATA_DIR = engramDataDir
+    const engramBinName =
+      process.platform === "win32"
+        ? "engram-windows-x86_64.exe"
+        : process.platform === "darwin"
+          ? process.arch === "arm64"
+            ? "engram-macos-aarch64"
+            : "engram-macos-x86_64"
+          : "engram-linux-x86_64"
+    const engramBin = join(engramDataDir, "bin", engramBinName)
+    if (existsSync(engramBin)) process.env.ENGRAM_BIN = engramBin
+    const engramSkillDir = join(engramDataDir, "skills", "engram")
+    if (existsSync(engramSkillDir)) process.env.PUNKCODE_ENGRAM_SKILL_DIR = engramSkillDir
+  }
+
   const appId = app.isPackaged ? APP_IDS[CHANNEL] : "site.myverse.punkcodeai.dev"
   const onboardingTestRoot = ((): string | undefined => {
     if (!TEST_ONBOARDING) return
