@@ -12,7 +12,6 @@ import { createOpencodeClient } from "@opencode-ai/sdk"
 import { ServerAuth } from "@/server/auth"
 import { CodexAuthPlugin } from "./openai/codex"
 import { PunkcodeAuthPlugin } from "./punkcode"
-import { EngramPlugin } from "./engram"
 import { Session } from "@/session/session"
 import { NamedError } from "@opencode-ai/core/util/error"
 import { CopilotAuthPlugin } from "./github-copilot/copilot"
@@ -82,9 +81,6 @@ function internalPlugins(flags: RuntimeFlags.Info): PluginInstance[] {
     XaiAuthPlugin,
     // PunkcodeAI（sub2api 桌面端 provider）：注入 codex 识别头触发 image_generation bridge。
     PunkcodeAuthPlugin,
-    // Engram 长期记忆系统（桌面端内置）：会话开始注入记忆热索引、空闲自动复盘巩固、/engram-* 命令。
-    // 资产(bin/scripts/skills)随 app 打包，路径由主进程 ENGRAM_DATA_DIR / ENGRAM_BIN env 注入。
-    EngramPlugin,
   ]
 }
 

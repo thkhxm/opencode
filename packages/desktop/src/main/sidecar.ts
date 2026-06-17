@@ -360,11 +360,8 @@ async function applyPunkcodeCredentials(credentials: SetCredentialsCommand["cred
         },
       },
     }
-    // imagegen + engram 两个 skill 目录都拼进 skills.paths（discoverSkills 用 **/SKILL.md 扫描各路径）。
-    const engramSkillDir = process.env.PUNKCODE_ENGRAM_SKILL_DIR
-    const skillPaths = [skillsDir, engramSkillDir].filter((p): p is string => !!p && p.length > 0)
-    if (skillPaths.length > 0) {
-      config.skills = { paths: skillPaths }
+    if (skillsDir && skillsDir.length > 0) {
+      config.skills = { paths: [skillsDir] }
     }
     process.env.OPENCODE_CONFIG_CONTENT = JSON.stringify(config)
 
