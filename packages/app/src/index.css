@@ -37,10 +37,13 @@
      不依赖位图本身的深色，深/浅背景都醒目。此处只定义背景流动的 keyframes。 */
   @keyframes logo-splash-shimmer {
     0% {
-      background-position: 200% 50%;
+      background-position: 0% 50%;
+    }
+    50% {
+      background-position: 100% 50%;
     }
     100% {
-      background-position: -200% 50%;
+      background-position: 0% 50%;
     }
   }
 

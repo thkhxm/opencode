@@ -40,8 +40,8 @@ export const Splash = (props: Pick<ComponentProps<"div">, "ref" | "class">) => {
         "mask-size": "contain",
         "background-image":
           "linear-gradient(110deg, #a855f7 0%, #22d3ee 28%, #f472b6 50%, #22d3ee 72%, #a855f7 100%)",
-        "background-size": "200% 100%",
-        animation: "logo-splash-shimmer 3s linear infinite",
+        "background-size": "300% 100%",
+        animation: "logo-splash-shimmer 7s ease-in-out infinite",
       }}
     />
   )
