@@ -970,4 +970,7 @@ export const dict = {
   "topup.status.rejected": "已拒绝",
   "topup.rejectReason": "原因：{{reason}}",
   "bootstrap.loading": "加载中...",
+  "bootstrap.slow": "连接耗时比平常久…",
+  "bootstrap.retry": "重试",
+  "bootstrap.goToLogin": "去登录",
 } satisfies Partial<Record<Keys, string>>

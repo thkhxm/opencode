@@ -12,16 +12,32 @@
  *   - 用 `createEffect` 观察响应式状态变化，未登录立即跳转；不渲染 children——避免页面闪一下。
  */
 
-import { createEffect, type JSX, Show } from "solid-js"
+import { createEffect, createSignal, onCleanup, type JSX, Show } from "solid-js"
 import { useNavigate } from "@solidjs/router"
+import { Button } from "@opencode-ai/ui/button"
 import { Splash } from "@opencode-ai/ui/logo"
 import { useLanguage } from "@/context/language"
 import { useAuth } from "@/stores/auth"
+
+/** splash 显示多久后冒出「连接慢，可重试/去登录」兜底操作（ms）。 */
+const SLOW_HINT_DELAY_MS = 5000
 
 export function AuthGate(props: { children?: JSX.Element }): JSX.Element {
   const auth = useAuth()
   const navigate = useNavigate()
   const language = useLanguage()
+
+  // splash 显示超过 SLOW_HINT_DELAY_MS 仍在 bootstrap → 给用户「重试 / 去登录」的逃生口，
+  // 避免只能干瞪着一颗永久 pulse 的 logo（启动慢/连不上后端时的体验兜底）。
+  const [slow, setSlow] = createSignal(false)
+  createEffect(() => {
+    if (!auth.bootstrapping()) {
+      setSlow(false)
+      return
+    }
+    const timer = setTimeout(() => setSlow(true), SLOW_HINT_DELAY_MS)
+    onCleanup(() => clearTimeout(timer))
+  })
 
   createEffect(() => {
     // bootstrap 还在跑 → 让 splash 兜着，先不跳。
@@ -30,6 +46,13 @@ export function AuthGate(props: { children?: JSX.Element }): JSX.Element {
       navigate("/login", { replace: true })
     }
   })
+
+  // 重试：重载整个 renderer，重新跑 ensureBootstrap（最可靠、零残留）。非浏览器环境 no-op。
+  const retry = () => {
+    if (typeof window !== "undefined" && typeof window.location?.reload === "function") {
+      window.location.reload()
+    }
+  }
 
   return (
     <Show
@@ -40,7 +63,19 @@ export function AuthGate(props: { children?: JSX.Element }): JSX.Element {
         {/* splash 期间无 Titlebar，补顶部可拖动区保持与 login 一致 */}
         <div data-tauri-drag-region class="absolute top-0 left-0 right-0 h-10" />
         <Splash class="w-16 h-20 opacity-60 animate-pulse" />
-        <p class="text-12-regular text-text-weak">{language.t("bootstrap.loading")}</p>
+        <p class="text-12-regular text-text-weak">
+          {slow() ? language.t("bootstrap.slow") : language.t("bootstrap.loading")}
+        </p>
+        <Show when={slow()}>
+          <div class="flex items-center gap-2">
+            <Button size="small" variant="secondary" onClick={retry}>
+              {language.t("bootstrap.retry")}
+            </Button>
+            <Button size="small" variant="ghost" onClick={() => navigate("/login", { replace: true })}>
+              {language.t("bootstrap.goToLogin")}
+            </Button>
+          </div>
+        </Show>
       </div>
     </Show>
   )

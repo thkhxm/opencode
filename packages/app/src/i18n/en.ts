@@ -1024,4 +1024,7 @@ export const dict = {
   "topup.status.rejected": "Rejected",
   "topup.rejectReason": "Reason: {{reason}}",
   "bootstrap.loading": "Loading...",
+  "bootstrap.slow": "Connecting is taking longer than usual...",
+  "bootstrap.retry": "Retry",
+  "bootstrap.goToLogin": "Go to login",
 }
