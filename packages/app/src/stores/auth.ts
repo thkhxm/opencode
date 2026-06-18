@@ -198,6 +198,68 @@ const normalizeServer = (url: string) => url.replace(/\/+$/, "")
 /** 拼 `${url}:${email}` 与 sub2api credentials flow 一致 */
 const buildAccountID = (server: string, email: string) => `${normalizeServer(server)}:${email}`
 
+// ============================================================
+// 网络容错：超时 + 有限退避重试
+// ============================================================
+//
+// 桌面端启动慢的根因之一：renderer 的鉴权 bootstrap 链对生产后端
+// (punkcodeai.myverse.site) 的请求全是裸 fetch、无超时——后端慢/网络抖动时
+// 这些请求会无限挂起，把启动 splash 一直 gate 住。
+//
+// 这里给所有鉴权类 fetch 统一加：
+//   1. AbortSignal.timeout(REQUEST_TIMEOUT_MS) —— 单次请求超时即 abort，不再无限等。
+//   2. 有限退避重试（默认 2 次额外重试）—— 仅对「瞬时网络错误」重试，
+//      业务错（envelope.code !== 0 → CredentialsError）不重试（重试也没用，且可能加重负担）。
+
+/** 单次请求超时（ms）。生产后端慢时 8s 即放弃本次，交给重试/降级。 */
+const REQUEST_TIMEOUT_MS = 8000
+/** 额外重试次数（首次失败后再试 N 次）。 */
+const REQUEST_RETRIES = 2
+/** 重试退避基数（ms）：第 k 次重试前等 BASE * 2^(k-1)，上限 maxDelay。 */
+const RETRY_BASE_DELAY_MS = 400
+const RETRY_MAX_DELAY_MS = 2000
+
+/** 是否瞬时网络错误（值得重试）。业务错 CredentialsError 不在此列。 */
+function isRetriableError(error: unknown): boolean {
+  if (error instanceof CredentialsError) return false
+  if (error instanceof AccountError) return true
+  if (error instanceof DOMException) {
+    // AbortError（超时）/ TimeoutError 都值得换一次重试。
+    return error.name === "AbortError" || error.name === "TimeoutError"
+  }
+  return true
+}
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+
+/**
+ * 带超时的 fetch。在 caller 传入的 init 上挂 AbortSignal.timeout(REQUEST_TIMEOUT_MS)。
+ *
+ * 注意：AbortSignal.timeout 触发时 fetch reject 一个 name="TimeoutError" 的 DOMException，
+ * 被下面的 retry 包装识别为可重试。
+ */
+async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+  return fetch(url, { ...init, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) })
+}
+
+/**
+ * 有限退避重试包装。仅对瞬时错误（见 isRetriableError）重试；业务错直接抛。
+ */
+async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
+  let lastError: unknown
+  for (let attempt = 0; attempt <= REQUEST_RETRIES; attempt++) {
+    try {
+      return await fn()
+    } catch (error) {
+      lastError = error
+      if (attempt === REQUEST_RETRIES || !isRetriableError(error)) throw error
+      const wait = Math.min(RETRY_BASE_DELAY_MS * Math.pow(2, attempt), RETRY_MAX_DELAY_MS)
+      await sleep(wait)
+    }
+  }
+  throw lastError
+}
+
 /**
  * 调 sub2api 某个 endpoint，先解 envelope，再按 data schema 取出业务数据。
  *
@@ -205,33 +267,35 @@ const buildAccountID = (server: string, email: string) => `${normalizeServer(ser
  * - HTTP 200 但 envelope.code !== 0 → CredentialsError
  */
 async function callApi<T>(url: string, body: unknown, label: string): Promise<T> {
-  let response: Response
-  try {
-    response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify(body),
-    })
-  } catch (cause) {
-    throw new AccountError(`${label}: HTTP request failed`, { cause })
-  }
+  return withRetry(async () => {
+    let response: Response
+    try {
+      response = await fetchWithTimeout(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify(body),
+      })
+    } catch (cause) {
+      throw new AccountError(`${label}: HTTP request failed`, { cause })
+    }
 
-  let envelope: CredentialsEnvelope<unknown>
-  try {
-    envelope = (await response.json()) as CredentialsEnvelope<unknown>
-  } catch (cause) {
-    throw new AccountError(`${label}: failed to decode envelope`, { cause })
-  }
+    let envelope: CredentialsEnvelope<unknown>
+    try {
+      envelope = (await response.json()) as CredentialsEnvelope<unknown>
+    } catch (cause) {
+      throw new AccountError(`${label}: failed to decode envelope`, { cause })
+    }
 
-  if (typeof envelope.code !== "number" || typeof envelope.message !== "string") {
-    throw new AccountError(`${label}: malformed envelope`)
-  }
+    if (typeof envelope.code !== "number" || typeof envelope.message !== "string") {
+      throw new AccountError(`${label}: malformed envelope`)
+    }
 
-  if (envelope.code !== 0) {
-    throw new CredentialsError(envelope.code, envelope.message)
-  }
+    if (envelope.code !== 0) {
+      throw new CredentialsError(envelope.code, envelope.message)
+    }
 
-  return envelope.data as T
+    return envelope.data as T
+  })
 }
 
 /**
@@ -239,30 +303,32 @@ async function callApi<T>(url: string, body: unknown, label: string): Promise<T>
  * 与 callApi 共用 envelope/错误约定，但走 GET。
  */
 async function callAuthorizedGet<T>(url: string, accessToken: string, label: string): Promise<T> {
-  let response: Response
-  try {
-    response = await fetch(url, {
-      method: "GET",
-      headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
-    })
-  } catch (cause) {
-    throw new AccountError(`${label}: HTTP request failed`, { cause })
-  }
+  return withRetry(async () => {
+    let response: Response
+    try {
+      response = await fetchWithTimeout(url, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+      })
+    } catch (cause) {
+      throw new AccountError(`${label}: HTTP request failed`, { cause })
+    }
 
-  let envelope: CredentialsEnvelope<unknown>
-  try {
-    envelope = (await response.json()) as CredentialsEnvelope<unknown>
-  } catch (cause) {
-    throw new AccountError(`${label}: failed to decode envelope`, { cause })
-  }
+    let envelope: CredentialsEnvelope<unknown>
+    try {
+      envelope = (await response.json()) as CredentialsEnvelope<unknown>
+    } catch (cause) {
+      throw new AccountError(`${label}: failed to decode envelope`, { cause })
+    }
 
-  if (typeof envelope.code !== "number" || typeof envelope.message !== "string") {
-    throw new AccountError(`${label}: malformed envelope`)
-  }
-  if (envelope.code !== 0) {
-    throw new CredentialsError(envelope.code, envelope.message)
-  }
-  return envelope.data as T
+    if (typeof envelope.code !== "number" || typeof envelope.message !== "string") {
+      throw new AccountError(`${label}: malformed envelope`)
+    }
+    if (envelope.code !== 0) {
+      throw new CredentialsError(envelope.code, envelope.message)
+    }
+    return envelope.data as T
+  })
 }
 
 // ============================================================
@@ -591,35 +657,37 @@ async function callAuthorizedPost<T>(
   body: unknown,
   label: string,
 ): Promise<T> {
-  let response: Response
-  try {
-    response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify(body),
-    })
-  } catch (cause) {
-    throw new AccountError(`${label}: HTTP request failed`, { cause })
-  }
+  return withRetry(async () => {
+    let response: Response
+    try {
+      response = await fetchWithTimeout(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify(body),
+      })
+    } catch (cause) {
+      throw new AccountError(`${label}: HTTP request failed`, { cause })
+    }
 
-  let envelope: CredentialsEnvelope<unknown>
-  try {
-    envelope = (await response.json()) as CredentialsEnvelope<unknown>
-  } catch (cause) {
-    throw new AccountError(`${label}: failed to decode envelope`, { cause })
-  }
+    let envelope: CredentialsEnvelope<unknown>
+    try {
+      envelope = (await response.json()) as CredentialsEnvelope<unknown>
+    } catch (cause) {
+      throw new AccountError(`${label}: failed to decode envelope`, { cause })
+    }
 
-  if (typeof envelope.code !== "number" || typeof envelope.message !== "string") {
-    throw new AccountError(`${label}: malformed envelope`)
-  }
-  if (envelope.code !== 0) {
-    throw new CredentialsError(envelope.code, envelope.message)
-  }
-  return envelope.data as T
+    if (typeof envelope.code !== "number" || typeof envelope.message !== "string") {
+      throw new AccountError(`${label}: malformed envelope`)
+    }
+    if (envelope.code !== 0) {
+      throw new CredentialsError(envelope.code, envelope.message)
+    }
+    return envelope.data as T
+  })
 }
 
 async function callCreateBalanceRequest(
@@ -785,15 +853,46 @@ async function backgroundRefresh(): Promise<void> {
  */
 let bootstrapPromise: Promise<void> | null = null
 
+/**
+ * bootstrap 整体保底超时（ms）。
+ *
+ * 即便单次请求已有 REQUEST_TIMEOUT_MS + 重试，多步串行（refresh + api-key + llm）
+ * 叠加退避后最坏仍可能拖较久。这里给 bootstrap 整体再加一道保底：超过 BOOTSTRAP_TIMEOUT_MS
+ * 就强制结束 splash（setBootstrapping(false)），由 AuthGate 兜底 UI 接管，绝不让 splash 无限等。
+ *
+ * 注意：超时只是「停止 gate splash」，bootstrapInner 仍在后台继续跑——它若随后成功会
+ * applySession 进登录态（AuthGate 的 createEffect 监听 isLoggedIn 会自然恢复到主界面）。
+ */
+const BOOTSTRAP_TIMEOUT_MS = 8000
+
 export const ensureBootstrap = (): Promise<void> => {
   if (bootstrapped) return Promise.resolve()
   if (bootstrapPromise) return bootstrapPromise
-  bootstrapPromise = bootstrapInner().finally(() => {
-    bootstrapped = true
-    bootstrapPromise = null
+
+  let settled = false
+  const finishBootstrapping = () => {
+    if (settled) return
+    settled = true
     // M5 P2-C：bootstrap 一旦跑完（无论结果），AuthGate 不再 splash，按 isLoggedIn 决定。
     setBootstrapping(false)
+  }
+
+  const inner = bootstrapInner().finally(() => {
+    bootstrapped = true
+    bootstrapPromise = null
+    finishBootstrapping()
   })
+
+  // 保底超时：到点即结束 splash，不阻断 inner（后台继续，成功会自动进登录态）。
+  const guard = new Promise<void>((resolve) => {
+    setTimeout(() => {
+      finishBootstrapping()
+      resolve()
+    }, BOOTSTRAP_TIMEOUT_MS)
+  })
+
+  // ensureBootstrap 的 await 方（路由挂载前）等「先完成者」即可——splash 不会被超时卡住。
+  bootstrapPromise = Promise.race([inner, guard])
   return bootstrapPromise
 }
 
@@ -824,15 +923,11 @@ async function bootstrapInner(): Promise<void> {
     //    这给了"旧账号 token 静默续命串号"的窗口，M9 收紧。）
     const creds = await syncCredentialsCore(url, pair.access_token)
 
-    // M7: refresh 成功后立即拉一次 /cli/me 补全 user.email/nickname/balance/usedToday/usedMonth。
-    // 失败兜底用 accountID 反推的 email + 占位 0（避免 widget 显示空白）；下一次 30s 轮询自然回填。
-    let me: CliMeResponse | null = null
-    try {
-      me = await callMe(url, pair.access_token)
-    } catch {
-      me = null
-    }
-
+    // 启动慢修复：从 bootstrap 关键链摘除 /cli/me。
+    //   旧实现这里 `await callMe(...)` 拉余额/用量再进登录态——后端慢时直接 gate 住启动 splash。
+    //   现在 bootstrap 只留 refresh + syncCredentials；user 字段先用 accountID 反推的 email + 占位 0
+    //   兜底（避免 widget 显示空白），余额/今日/本月用量由 BalanceWidget onMount 首拉 `/cli/me` 负责
+    //   （见 balance-widget.tsx：onMount 立即 refreshOnce() + 30s 轮询）。
     const next: AuthState = {
       server: url,
       accountID: persisted.accountID,
@@ -840,12 +935,12 @@ async function bootstrapInner(): Promise<void> {
       refreshToken: pair.refresh_token,
       expiry,
       user: {
-        id: me?.id ?? 0,
-        email: me?.email ?? emailFromID,
-        nickname: me?.nickname ?? emailFromID,
-        balanceUsd: me?.balance_usd ?? 0,
-        usedTodayUsd: me?.used_today_usd ?? 0,
-        usedMonthUsd: me?.used_month_usd ?? 0,
+        id: 0,
+        email: emailFromID,
+        nickname: emailFromID,
+        balanceUsd: 0,
+        usedTodayUsd: 0,
+        usedMonthUsd: 0,
       },
       ...creds,
     }
