@@ -1,4 +1,5 @@
 import { type ComponentProps } from "solid-js"
+import splashLogo from "../assets/logo.png"
 
 export const Mark = (props: { class?: string }) => {
   return (
@@ -15,19 +16,20 @@ export const Mark = (props: { class?: string }) => {
   )
 }
 
-export const Splash = (props: Pick<ComponentProps<"svg">, "ref" | "class">) => {
+// PunkcodeAI 启动 splash logo（M-启动慢修复）：
+//   原硬编码 SVG 换成 icon/logo.png（PUNK CODE 朋克编码 wordmark, 透明背景）。
+//   - vite import 该 png 得到打包后的 URL（ui 包 tsconfig 含 vite/client 类型, 解析为 string）。
+//   - 保留 props.class（尺寸 + animate-pulse 动画继续生效）与 props.ref。
+//   - object-contain 防拉伸：logo 是宽幅 wordmark, 落在调用方给的盒子里按比例缩放、不变形。
+export const Splash = (props: Pick<ComponentProps<"img">, "ref" | "class">) => {
   return (
-    <svg
+    <img
       ref={props.ref}
       data-component="logo-splash"
-      classList={{ [props.class ?? ""]: !!props.class }}
-      viewBox="0 0 80 100"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-    >
-      <path d="M60 80H20V40H60V80Z" fill="var(--icon-base)" />
-      <path d="M60 20H20V80H60V20ZM80 100H0V0H80V100Z" fill="var(--icon-strong-base)" />
-    </svg>
+      src={splashLogo}
+      alt="PunkcodeAI"
+      classList={{ "object-contain": true, [props.class ?? ""]: !!props.class }}
+    />
   )
 }
 
