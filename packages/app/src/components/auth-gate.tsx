@@ -62,7 +62,7 @@ export function AuthGate(props: { children?: JSX.Element }): JSX.Element {
       <div class="relative h-dvh w-screen flex flex-col items-center justify-center bg-background-base gap-4">
         {/* splash 期间无 Titlebar，补顶部可拖动区保持与 login 一致 */}
         <div data-tauri-drag-region class="absolute top-0 left-0 right-0 h-10" />
-        <Splash class="w-16 h-20 opacity-60 animate-pulse" />
+        <Splash class="w-40 h-16 opacity-60 animate-pulse" />
         <p class="text-12-regular text-text-weak">
           {slow() ? language.t("bootstrap.slow") : language.t("bootstrap.loading")}
         </p>
