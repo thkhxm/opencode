@@ -11,7 +11,7 @@ import type {
 } from "@opencode-ai/sdk/v2/client"
 import { showToast } from "@opencode-ai/ui/toast"
 import { getFilename } from "@opencode-ai/core/util/path"
-import { retry } from "@opencode-ai/core/util/retry"
+import { retry, isTransientError } from "@opencode-ai/core/util/retry"
 import { batch } from "solid-js"
 import { reconcile, type SetStoreFunction, type Store } from "solid-js/store"
 import type { State, VcsCache } from "./types"
@@ -187,7 +187,10 @@ export const loadProvidersQuery = (directory: string | null, sdk: OpencodeClient
 export const loadAgentsQuery = (directory: string | null, sdk: OpencodeClient) =>
   queryOptions({
     queryKey: [directory, "agents"],
-    queryFn: () => retry(() => sdk.app.agents().then((x) => normalizeAgentList(x.data))),
+    // agents 这条最易落在 sidecar 重启窗口(截图 /agent→499)。给更宽重试预算(~20s+),
+    // 稳超 respawn(真换账号那轮)+updater 串行窗口, 避免预算耗尽冒泡弹 reloadFailed toast。
+    queryFn: () =>
+      retry(() => sdk.app.agents().then((x) => normalizeAgentList(x.data)), { attempts: 8, maxDelay: 4000 }),
   })
 
 export const loadPathQuery = (directory: string | null, sdk: OpencodeClient) =>
@@ -307,6 +310,11 @@ export async function bootstrapDirectory(input: {
       () => input.queryClient.fetchQuery(loadMcpQuery(input.directory, input.sdk)),
       () =>
         input.queryClient.fetchQuery(loadProvidersQuery(input.directory, input.sdk)).catch((err) => {
+          // 瞬时错误(sidecar 重启窗口期 499/空 body/连接被拒)只 console, 不弹 reloadFailed toast。
+          if (isTransientError(err)) {
+            console.warn("transient provider load error suppressed", err)
+            return
+          }
           const project = getFilename(input.directory)
           showToast({
             variant: "error",
@@ -318,16 +326,21 @@ export async function bootstrapDirectory(input: {
 
     await waitForPaint()
     const slowErrs = errors(await runAll(slow))
-    if (slowErrs.length > 0) {
-      console.error("Failed to finish bootstrap instance", slowErrs[0])
+    // 只对"非瞬时"错误弹 reloadFailed toast。sidecar 重启窗口期的 499/空 body/连接中断属瞬时,
+    // 即便 retry 兜不住也只 console, 不打扰用户(治本后冷启动已无 respawn; 真换账号那轮残窗也不误报)。
+    const fatalErrs = slowErrs.filter((e) => !isTransientError(e))
+    if (fatalErrs.length > 0) {
+      console.error("Failed to finish bootstrap instance", fatalErrs[0])
       const project = getFilename(input.directory)
       showToast({
         variant: "error",
         title: input.translate("toast.project.reloadFailed.title", { project }),
-        description: formatServerError(slowErrs[0], input.translate),
+        description: formatServerError(fatalErrs[0], input.translate),
       })
+    } else if (slowErrs.length > 0) {
+      console.warn("transient bootstrap errors suppressed", slowErrs[0])
     }
 
-    if (loading && slowErrs.length === 0) input.setStore("status", "complete")
+    if (loading && fatalErrs.length === 0) input.setStore("status", "complete")
   })()
 }

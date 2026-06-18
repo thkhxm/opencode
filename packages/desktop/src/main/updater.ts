@@ -14,7 +14,10 @@ export function setupAutoUpdater() {
   autoUpdater.logger = logger
   autoUpdater.channel = "latest"
   autoUpdater.allowPrerelease = false
-  autoUpdater.allowDowngrade = true
+  // 关掉降级：feed 上意外是旧版(如发布滞后)时, allowDowngrade=true 会把比当前低的版本判为"可更新"
+  // 并下载(log 实证: current 1.15.19 却下了 1.15.18), 既拖慢冷启动又造成版本回退。置 false 后
+  // 仅当 feed 版本 > 当前才更新。如确需强制回滚, 应走显式回滚标志而非无条件放任降级。
+  autoUpdater.allowDowngrade = false
   autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = false
 

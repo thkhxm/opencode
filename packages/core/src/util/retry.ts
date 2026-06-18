@@ -20,9 +20,13 @@ const TRANSIENT_MESSAGES = [
   // 这属瞬时错误，sidecar 起好即恢复，应重试而非立即弹"无法重新加载"toast。
   "499",
   "empty response body",
+  // node/undici 端(sidecar 侧 fetch)与端口无监听窗口期的连接错误措辞补全(已有 econn* 是无空格版)。
+  "fetch failed",
+  "connection refused",
+  "connection reset",
 ]
 
-function isTransientError(error: unknown): boolean {
+export function isTransientError(error: unknown): boolean {
   if (!error) return false
   // oxlint-disable-next-line no-base-to-string -- error is unknown, intentional coercion for message matching
   const message = String(error instanceof Error ? error.message : error).toLowerCase()

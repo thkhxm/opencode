@@ -20,9 +20,11 @@ import { parseMarkdown } from "./markdown"
 import { createMenu } from "./menu"
 import {
   getDefaultServerUrl,
+  getLastAccountID,
   getWslConfig,
   preferAppEnv,
   setDefaultServerUrl,
+  setLastAccountID,
   setWslConfig,
   spawnLocalServer,
   type SidecarListener,
@@ -147,6 +149,7 @@ async function setPunkcodeCredentialsToSidecar(credentials: PunkcodeCredentialsP
       // 并把 currentSidecarAccountID 设为新账号——所以这里 respawn 成功后直接返回，不重复 push。
       await respawnSidecar(accountDataPathFor(nextAccountID))
       currentSidecarAccountID = nextAccountID
+      setLastAccountID(nextAccountID)
       return
     } catch (e) {
       writeLog("utility", "respawn sidecar for account switch failed", { error: String(e) }, "error")
@@ -157,11 +160,16 @@ async function setPunkcodeCredentialsToSidecar(credentials: PunkcodeCredentialsP
 
   if (!server) return
   await server.setCredentials(credentials)
-  if (nextAccountID) currentSidecarAccountID = nextAccountID
+  if (nextAccountID) {
+    currentSidecarAccountID = nextAccountID
+    setLastAccountID(nextAccountID)
+  }
 }
 
 async function clearPunkcodeCredentialsFromSidecar() {
   pendingPunkcodeCredentials = null
+  // 登出/清凭据：清掉持久化的 lastAccountID, 否则下次冷启动会用"已登出账号"的隔离 db 起 sidecar。
+  setLastAccountID(null)
   if (!server) return
   await server.clearCredentials()
 }
@@ -459,7 +467,10 @@ const main = Effect.gen(function* () {
         }
         try {
           await listener.setCredentials(creds)
-          if (creds.accountID) currentSidecarAccountID = creds.accountID
+          if (creds.accountID) {
+            currentSidecarAccountID = creds.accountID
+            setLastAccountID(creds.accountID)
+          }
         } catch (e) {
           writeLog("utility", "set initial punkcode credentials failed", { error: String(e) }, "warn")
         }
@@ -483,7 +494,15 @@ const main = Effect.gen(function* () {
       await Promise.race([health.wait, new Promise<void>((resolve) => setTimeout(resolve, 15_000))])
     }
 
-    const health = yield* Effect.promise(() => doSpawn(undefined))
+    // 治本(消除冷启动 respawn)：首个 spawn 直接用"上次账号"的隔离 db 起 sidecar,
+    // 而不是先 from:null 起、等 renderer 注入账号后再 respawn(那一轮派生 499toast/闪烁/慢)。
+    // app.setPath('userData') 已在更早执行, getLastAccountID()/accountDataPathFor() 此刻可用。
+    // 预置 currentSidecarAccountID, 让 renderer bootstrap 后 push 同账号凭据时判定相等 → 纯热注入不 respawn;
+    // 只有用户真换了账号(与 savedAccountID 不同)才仍会 respawn(低频、属正确行为)。
+    const savedAccountID = getLastAccountID()
+    const initialAccountPath = accountDataPathFor(savedAccountID ?? undefined)
+    if (savedAccountID) currentSidecarAccountID = savedAccountID
+    const health = yield* Effect.promise(() => doSpawn(initialAccountPath))
     yield* Deferred.succeed(serverReady, {
       url,
       username: "opencode",

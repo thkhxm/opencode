@@ -953,6 +953,12 @@ async function bootstrapInner(): Promise<void> {
       writePersisted(null)
       return
     }
+    // 治本配套(step3+4)：冷启动用 refresh_token 恢复时, sidecar 首发 db 已据持久化的 lastAccountID
+    // 预投为本账号 db(见 index.ts 首个 doSpawn + server.ts getLastAccountID)。renderer 此刻对着的就是
+    // 正确账号 db, 无需整窗 reload。预置 synced marker → applySession 判定相等 → 跳过 reloadRenderer,
+    // 消除"主界面→loading→主界面"闪烁的 renderer 侧来源。仅冷启动恢复路径如此;
+    // 运行期真正切账号(handleAuthSuccess, marker≠新账号)仍会 reload, 不受影响。
+    setSyncedAccountID(next.accountID)
     applySession(next)
   } catch {
     // refresh_token 过期 / 网络故障 / sk-key 拉取失败 → 清 sidecar 凭据 + 清持久化，让用户重新登录。

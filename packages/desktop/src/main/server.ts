@@ -2,7 +2,7 @@ import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { app, utilityProcess } from "electron"
 import type { Details } from "electron"
-import { DEFAULT_SERVER_URL_KEY, WSL_ENABLED_KEY } from "./constants"
+import { DEFAULT_SERVER_URL_KEY, LAST_ACCOUNT_ID_KEY, WSL_ENABLED_KEY } from "./constants"
 import { getUserShell, loadShellEnv } from "./shell-env"
 import { getStore } from "./store"
 import type { PunkcodeCredentials, SqliteMigrationProgress } from "../preload/types"
@@ -69,6 +69,21 @@ export function setDefaultServerUrl(url: string | null) {
   }
 
   getStore().delete(DEFAULT_SERVER_URL_KEY)
+}
+
+// 治本(消除冷启动 respawn)：上次成功注入凭据的账号 accountID(非密钥)。
+// 存在主进程可同步读的 opencode.settings(独立于 renderer localStorage)，spawn sidecar 前可直接读。
+export function getLastAccountID(): string | null {
+  const value = getStore().get(LAST_ACCOUNT_ID_KEY)
+  return typeof value === "string" ? value : null
+}
+
+export function setLastAccountID(id: string | null) {
+  if (id) {
+    getStore().set(LAST_ACCOUNT_ID_KEY, id)
+    return
+  }
+  getStore().delete(LAST_ACCOUNT_ID_KEY)
 }
 
 export function getWslConfig(): WslConfig {
