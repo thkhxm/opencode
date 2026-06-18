@@ -193,8 +193,17 @@ export function createChildStoreManager(input: {
             get provider() {
               const EMPTY = { all: new Map(), connected: [], default: {} }
               if (providerQuery.isLoading) return EMPTY
-              if (providerQuery.data?.all.size === 0 && input.global.provider.all.size > 0) return input.global.provider
-              return providerQuery.data ?? EMPTY
+              const data = providerQuery.data
+              // 兜底用全局, 覆盖两种 directory-scoped stale:
+              // ① child all 为空; ② child all 有 push 前全量但 connected 为空——凭据 push 只可靠刷新了全局
+              //    provider query, directory query 未被 refetch, 停在 push 前无 auth 的 connected:[]。
+              // 任一情况下只要全局已有可用(connected)provider, 就用全局, 保证会话内模型下拉能出。
+              if (
+                (!data || data.all.size === 0 || data.connected.length === 0) &&
+                input.global.provider.connected.length > 0
+              )
+                return input.global.provider
+              return data ?? EMPTY
             },
             config: {},
             get path() {

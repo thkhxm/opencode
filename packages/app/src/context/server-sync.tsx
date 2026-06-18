@@ -228,7 +228,11 @@ export function createServerSyncContext() {
     translate: language.t,
     queryOptions: queryOptionsApi,
     global: {
-      provider: globalStore.provider,
+      // 响应式传递: 用 getter 而非快照。否则 children 拿到的是创建时(往往为空)的 provider 固定值,
+      // 凭据 push 后全局 provider 已刷新, child 兜底却仍读旧空快照 → directory scope 模型下拉空。
+      get provider() {
+        return globalStore.provider
+      },
     },
   })
 
