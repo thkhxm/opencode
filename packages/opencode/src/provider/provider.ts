@@ -32,6 +32,10 @@ import { ProviderError } from "./error"
 
 const log = Log.create({ service: "provider" })
 const OPENAI_HEADER_TIMEOUT_DEFAULT = 10_000
+// 启动慢修复：插件 models() 求值 / gitlab discoverModels 的总超时。
+// 这些是「远程拉模型列表」, 慢了会拖住 provider 初始化进而拖慢首屏；
+// 超时即降级到本地缓存（不清空已有 models）, 不阻塞启动。
+const MODELS_DISCOVERY_TIMEOUT = "3 seconds"
 function shouldUseCopilotResponsesApi(modelID: string): boolean {
   const match = /^gpt-(\d+)/.exec(modelID)
   if (!match) return false
@@ -1278,32 +1282,59 @@ export const layer = Layer.effect(
           return true
         }
 
-        for (const hook of plugins) {
+        // 启动慢修复（provider models 并发 + 超时 + 降级）：
+        //   旧实现这里串行 `for...of` + `yield* Effect.promise` 逐个 await 每个插件的 models()——
+        //   任一插件的 models() 慢（远程拉模型列表）就把整条 provider 初始化链拖住, 进而拖慢首屏。
+        //   现在改为：
+        //     - 先筛出有 models() 的可用插件（连同已解析的 auth）。
+        //     - 用 Effect.forEach concurrency:'unbounded' 并发求值所有 models()。
+        //     - 每个 models() 加 MODELS_DISCOVERY_TIMEOUT 总超时 + 失败/超时降级：
+        //       保留该 provider 现有的本地模型缓存（database 自带的 models-dev 目录），不清空。
+        const pluginModelTasks = plugins.flatMap((hook) => {
           const p = hook.provider
           const models = p?.models
-          if (!p || !models) continue
-
+          if (!p || !models) return []
           const providerID = ProviderID.make(p.id)
-          if (disabled.has(providerID)) continue
-
+          if (disabled.has(providerID)) return []
           const provider = database[providerID]
-          if (!provider) continue
-          const pluginAuth = yield* auth.get(providerID).pipe(Effect.orDie)
+          if (!provider) return []
+          return [{ providerID, provider, models }]
+        })
 
-          provider.models = yield* Effect.promise(async () => {
-            const next = await models(toPublicInfo(provider), { auth: pluginAuth })
-            return Object.fromEntries(
-              Object.entries(next).map(([id, model]) => [
-                id,
-                {
-                  ...model,
-                  id: ModelID.make(id),
-                  providerID,
-                },
-              ]),
-            )
-          })
-        }
+        yield* Effect.forEach(
+          pluginModelTasks,
+          ({ providerID, provider, models }) =>
+            Effect.gen(function* () {
+              const pluginAuth = yield* auth.get(providerID).pipe(Effect.orDie)
+              const next = yield* Effect.tryPromise(async () => {
+                const result = await models(toPublicInfo(provider), { auth: pluginAuth })
+                return Object.fromEntries(
+                  Object.entries(result).map(([id, model]) => [
+                    id,
+                    {
+                      ...model,
+                      id: ModelID.make(id),
+                      providerID,
+                    },
+                  ]),
+                )
+              }).pipe(
+                Effect.timeout(MODELS_DISCOVERY_TIMEOUT),
+                // 超时/失败 → 降级保留本地缓存（不清空 provider.models）, 仅记日志。
+                Effect.catch((e) =>
+                  Effect.sync(() => {
+                    log.warn("plugin models() failed, keeping local cache", {
+                      id: providerID,
+                      error: e instanceof Error ? e.message : String(e),
+                    })
+                    return null
+                  }),
+                ),
+              )
+              if (next) provider.models = next
+            }),
+          { concurrency: "unbounded" },
+        )
 
         // extend database from config
         for (const [providerID, provider] of configProviders) {
@@ -1477,6 +1508,9 @@ export const layer = Layer.effect(
 
         const gitlab = ProviderID.make("gitlab")
         if (discoveryLoaders[gitlab] && providers[gitlab] && isProviderAllowed(gitlab)) {
+          // 启动慢修复：gitlab discoverModels 补 MODELS_DISCOVERY_TIMEOUT 总超时。
+          // 内层 try/catch 处理拉取错误（保留已有模型）, 外层 timeout 处理「拉取慢」——
+          // 超时即降级跳过（已有 models 不变）, 不阻塞 provider 初始化。
           yield* Effect.promise(async () => {
             try {
               const discovered = await discoveryLoaders[gitlab]()
@@ -1488,7 +1522,16 @@ export const layer = Layer.effect(
             } catch (e) {
               log.warn("state discovery error", { id: "gitlab", error: e })
             }
-          })
+          }).pipe(
+            Effect.timeout(MODELS_DISCOVERY_TIMEOUT),
+            Effect.catch((e) =>
+              Effect.sync(() => {
+                log.warn("gitlab model discovery timed out, skipping", {
+                  error: e instanceof Error ? e.message : String(e),
+                })
+              }),
+            ),
+          )
         }
 
         for (const [id, provider] of Object.entries(providers)) {
