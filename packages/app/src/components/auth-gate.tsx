@@ -69,10 +69,10 @@ export function AuthGate(props: { children?: JSX.Element }): JSX.Element {
           {/* splash 期间无 Titlebar，补顶部可拖动区保持与 login 一致 */}
           <div data-tauri-drag-region class="absolute top-0 left-0 right-0 h-10" />
           <Splash class="w-40 h-16 opacity-60 animate-pulse" />
-          <p class="text-12-regular text-text-weak">
-            {slow() ? language.t("bootstrap.slow") : language.t("bootstrap.loading")}
-          </p>
+          {/* 正常加载只显示 logo 流光，移除「加载中」文本——避免「空白→加载中」文本切换的突兀感（用户反馈）。
+              仅在连接慢（slow，5s 后仍未就绪）时才显示提示 + 重试/去登录逃生口。 */}
           <Show when={slow()}>
+            <p class="text-12-regular text-text-weak">{language.t("bootstrap.slow")}</p>
             <div class="flex items-center gap-2">
               <Button size="small" variant="secondary" onClick={retry}>
                 {language.t("bootstrap.retry")}
