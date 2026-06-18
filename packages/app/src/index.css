@@ -32,6 +32,18 @@
     }
   }
 
+  /* PunkcodeAI splash logo 流光动画（深色背景可见）：
+     ui/logo.tsx 的 Splash 用 logo.png 作 mask 取「PUNK CODE」字形、再用流动渐变背景填充，
+     不依赖位图本身的深色，深/浅背景都醒目。此处只定义背景流动的 keyframes。 */
+  @keyframes logo-splash-shimmer {
+    0% {
+      background-position: 200% 50%;
+    }
+    100% {
+      background-position: -200% 50%;
+    }
+  }
+
   [data-component="session-progress"] {
     position: absolute;
     inset: 0 0 auto;

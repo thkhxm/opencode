@@ -16,19 +16,33 @@ export const Mark = (props: { class?: string }) => {
   )
 }
 
-// PunkcodeAI 启动 splash logo（M-启动慢修复）：
-//   原硬编码 SVG 换成 icon/logo.png（PUNK CODE 朋克编码 wordmark, 透明背景）。
-//   - vite import 该 png 得到打包后的 URL（ui 包 tsconfig 含 vite/client 类型, 解析为 string）。
-//   - 保留 props.class（尺寸 + animate-pulse 动画继续生效）与 props.ref。
-//   - object-contain 防拉伸：logo 是宽幅 wordmark, 落在调用方给的盒子里按比例缩放、不变形。
-export const Splash = (props: Pick<ComponentProps<"img">, "ref" | "class">) => {
+// PunkcodeAI 启动 splash logo（M-启动慢修复 + 渐变流光）：
+//   logo.png（PUNK CODE 朋克编码 wordmark, 深色字形 + 透明背景）若直接 <img> 显示，
+//   在深色背景下看不见。改为用 logo.png 作 CSS mask（只取字形 alpha 形状），
+//   再用流动的渐变背景填充字形——不依赖位图本身颜色，深/浅背景都醒目，且自带流光动画。
+//   - mask-image 用 vite import 的 png URL（inline style，运行时 URL）；mask-size:contain 防拉伸。
+//   - 渐变 + background-size 200% + animation(logo-splash-shimmer, 见 app/index.css) = 流光横向流动。
+//   - inline animation 覆盖调用方 class 里的 animate-pulse（流光取代脉动）；opacity/尺寸 class 仍生效。
+export const Splash = (props: Pick<ComponentProps<"div">, "ref" | "class">) => {
   return (
-    <img
+    <div
       ref={props.ref}
       data-component="logo-splash"
-      src={splashLogo}
-      alt="PunkcodeAI"
-      classList={{ "object-contain": true, [props.class ?? ""]: !!props.class }}
+      classList={{ [props.class ?? ""]: !!props.class }}
+      style={{
+        "-webkit-mask-image": `url(${splashLogo})`,
+        "mask-image": `url(${splashLogo})`,
+        "-webkit-mask-repeat": "no-repeat",
+        "mask-repeat": "no-repeat",
+        "-webkit-mask-position": "center",
+        "mask-position": "center",
+        "-webkit-mask-size": "contain",
+        "mask-size": "contain",
+        "background-image":
+          "linear-gradient(110deg, #a855f7 0%, #22d3ee 28%, #f472b6 50%, #22d3ee 72%, #a855f7 100%)",
+        "background-size": "200% 100%",
+        animation: "logo-splash-shimmer 3s linear infinite",
+      }}
     />
   )
 }
