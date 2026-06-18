@@ -6,7 +6,7 @@ import { createStore, produce, reconcile } from "solid-js/store"
 import { useLanguage } from "@/context/language"
 import type { InitError } from "../pages/error"
 import { useServerSDK } from "./server-sdk"
-import { useAuth } from "@/stores/auth"
+import { onCredentialsPushed } from "@/stores/auth"
 import {
   bootstrapDirectory,
   bootstrapGlobal,
@@ -130,18 +130,16 @@ export function createServerSyncContext() {
   })
   const queryClient = useQueryClient()
 
-  // 模型限定修复（兜底）：登录态从「未登录→已登录」时，主动让所有 provider query 重抓。
-  // 背景：sidecar 启动时虽已预注入 enabled_providers:[punkcodeai]（见 sidecar.ts buildPunkcodeBaseConfig），
-  // 但真实模型列表是 renderer push 凭据（setCredentials）后才注入 sidecar config 的；此刻 renderer 的
-  // providerQuery 缓存还停在 push 前（空/预设）。监听 isLoggedIn() 翻 true（严格晚于 pushCredentialsToSidecar
-  // 的 ACK = disposeAllInstances 后才 resolve），局部 invalidate 重抓 [*,'providers']，让限定模型即时填充。
-  // 只重抓 providers 一条 query，不整窗 reload，不回退已修好的 splash 闪烁（与 updateConfigMutation.onSuccess 同款）。
-  const auth = useAuth()
-  createEffect(() => {
-    if (auth.isLoggedIn()) {
-      queryClient.invalidateQueries({ predicate: (query) => query.queryKey[1] === "providers" })
-    }
-  })
+  // 模型限定修复（兜底）：凭据真正 push 落 sidecar（ACK 后，见 auth.ts notifyCredentialsPushed）再强制重抓 provider。
+  // 不靠 isLoggedIn 边沿 invalidate——那会被 TanStack Query 的 fetch 去重（并入仍在飞行的「读空 config」那发请求）
+  // 或 sidecar ACK 超时打穿，导致 provider.list 永久停在 push 前预注入的空 models（模型下拉空）。
+  // refetchQueries(type:'all') 锚定在 push ACK 之后：此刻首发的空 config fetch 已 settle，强制新 fetch
+  // 覆盖缓存为真实 models（gpt-5.5/gpt-5.4）。只重抓 providers，不整窗 reload，不回退已修好的 splash 闪烁。
+  onCleanup(
+    onCredentialsPushed(() => {
+      void queryClient.refetchQueries({ predicate: (query) => query.queryKey[1] === "providers", type: "all" })
+    }),
+  )
 
   let bootedAt = 0
   let bootingRoot = false

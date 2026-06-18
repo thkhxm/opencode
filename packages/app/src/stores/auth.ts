@@ -505,6 +505,24 @@ function reloadRenderer(): void {
   }
 }
 
+// 凭据真正 push 落 sidecar(ACK 后)的订阅者集合——让 server-sync 在凭据生效后主动强制重抓 provider 列表，
+// 而非靠 isLoggedIn 边沿 invalidate(会被 TanStack Query fetch 去重 / sidecar ACK 超时打穿，导致 provider.list
+// 停在 push 前预注入的空 models → 模型下拉空)。在 handleAuthSuccess / bootstrapInner 的 applySession 之后触发。
+const credentialsPushedCallbacks = new Set<() => void>()
+export function onCredentialsPushed(cb: () => void): () => void {
+  credentialsPushedCallbacks.add(cb)
+  return () => credentialsPushedCallbacks.delete(cb)
+}
+function notifyCredentialsPushed(): void {
+  for (const cb of credentialsPushedCallbacks) {
+    try {
+      cb()
+    } catch (e) {
+      console.error("onCredentialsPushed callback failed", e)
+    }
+  }
+}
+
 const handleAuthSuccess = async (server: string, auth: CredentialsAuthResponse) => {
   const url = normalizeServer(server)
   const expiry = Date.now() + auth.expires_in * 1000
@@ -546,6 +564,7 @@ const handleAuthSuccess = async (server: string, auth: CredentialsAuthResponse) 
     )
   }
   applySession(next)
+  notifyCredentialsPushed()
 }
 
 const applyRefreshedPair = (pair: CredentialsTokenPair) => {
@@ -960,6 +979,7 @@ async function bootstrapInner(): Promise<void> {
     // 运行期真正切账号(handleAuthSuccess, marker≠新账号)仍会 reload, 不受影响。
     setSyncedAccountID(next.accountID)
     applySession(next)
+    notifyCredentialsPushed()
   } catch {
     // refresh_token 过期 / 网络故障 / sk-key 拉取失败 → 清 sidecar 凭据 + 清持久化，让用户重新登录。
     // 清 sidecar 是 M9 关键：避免上一次会话残留在 sidecar 进程里的旧账号 key 继续被用于聊天。

@@ -236,7 +236,9 @@ export async function spawnLocalServer(
     }
   })
 
-  const SIDECAR_CREDENTIALS_ACK_TIMEOUT = 5000
+  // 15s(原 5s 太短): applyPunkcodeCredentials 首次要 import virtual:opencode-server + disposeAllInstances,
+  // 可能 >5s。超时提前 resolve 会让 push「假成功」(config 还没写完真实 models)→ renderer 重抓拿到空 models。
+  const SIDECAR_CREDENTIALS_ACK_TIMEOUT = 15000
   function postCredentialsMessage(message: Record<string, unknown>): Promise<void> {
     if (exited) return Promise.resolve()
     return new Promise<void>((resolve) => {
