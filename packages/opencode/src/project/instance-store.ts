@@ -2,7 +2,7 @@ import { GlobalBus } from "@/bus/global"
 import { serviceUse } from "@opencode-ai/core/effect/service-use"
 import { WorkspaceContext } from "@/control-plane/workspace-context"
 import { InstanceRef } from "@/effect/instance-ref"
-import { disposeInstance as runDisposers } from "@/effect/instance-registry"
+import { disposeInstance as runDisposers, invalidateAllInstances } from "@/effect/instance-registry"
 import { AppFileSystem } from "@opencode-ai/core/filesystem"
 import { Context, Deferred, Duration, Effect, Exit, Layer, Scope } from "effect"
 import { type InstanceContext } from "./instance-context"
@@ -169,6 +169,11 @@ export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootst
           }),
         { discard: true },
       )
+      // 兜底：清掉所有 InstanceState（Provider / Config / ...）的 per-directory ScopedCache。
+      // 即便上面 InstanceStore.cache 为空（provider.list 未经 InstanceStore.load、直接 InstanceState.use
+      // 填充了 ScopedCache 的场景），也保证 disposeAll 之后下一次 use 必然重建、读到最新 env——
+      // 这是桌面端 push 凭据后模型下拉能刷新出来的关键。
+      yield* Effect.promise(() => invalidateAllInstances())
     })
 
     const cachedDisposeAll = yield* Effect.cachedWithTTL(disposeAllOnce(), Duration.zero)

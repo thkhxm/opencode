@@ -1596,7 +1596,9 @@ export const layer = Layer.effect(
       }),
     )
 
-    const list = Effect.fn("Provider.list")(() => InstanceState.use(state, (s) => s.providers))
+    const list = Effect.fn("Provider.list")(() => {
+      return InstanceState.use(state, (s) => s.providers)
+    })
 
     async function resolveSDK(model: Model, s: State, envs: Record<string, string | undefined>) {
       try {
