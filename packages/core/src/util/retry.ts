@@ -15,6 +15,11 @@ const TRANSIENT_MESSAGES = [
   "econnrefused",
   "etimedout",
   "socket hang up",
+  // sidecar(opencode core 子进程)重启/未就绪窗口期(如桌面端热更新后首启、切账号 respawn)：
+  // renderer 抢跑请求时连接被中断，表现为 HTTP 499(client closed request) + 空响应体。
+  // 这属瞬时错误，sidecar 起好即恢复，应重试而非立即弹"无法重新加载"toast。
+  "499",
+  "empty response body",
 ]
 
 function isTransientError(error: unknown): boolean {
@@ -25,7 +30,9 @@ function isTransientError(error: unknown): boolean {
 }
 
 export async function retry<T>(fn: () => Promise<T>, options: RetryOptions = {}): Promise<T> {
-  const { attempts = 3, delay = 500, factor = 2, maxDelay = 10000, retryIf = isTransientError } = options
+  // attempts 5: 配合上面的 499/瞬时识别，覆盖 sidecar 重启窗口(0.5+1+2+4≈7.5s 内多次重试)，
+  // 让热更新/切账号后 renderer 抢跑的请求等 sidecar 起好后自动成功，避免瞬时报错弹窗。
+  const { attempts = 5, delay = 500, factor = 2, maxDelay = 10000, retryIf = isTransientError } = options
 
   let lastError: unknown
   for (let attempt = 0; attempt < attempts; attempt++) {
