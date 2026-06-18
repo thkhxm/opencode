@@ -13,6 +13,7 @@
  */
 
 import { createEffect, createSignal, onCleanup, type JSX, Show } from "solid-js"
+import { Portal } from "solid-js/web"
 import { useNavigate } from "@solidjs/router"
 import { Button } from "@opencode-ai/ui/button"
 import { Splash } from "@opencode-ai/ui/logo"
@@ -59,24 +60,30 @@ export function AuthGate(props: { children?: JSX.Element }): JSX.Element {
       when={auth.bootstrapping()}
       fallback={<Show when={auth.isLoggedIn()}>{props.children}</Show>}
     >
-      <div class="fixed inset-0 z-50 flex flex-col items-center justify-center bg-background-base gap-4">
-        {/* splash 期间无 Titlebar，补顶部可拖动区保持与 login 一致 */}
-        <div data-tauri-drag-region class="absolute top-0 left-0 right-0 h-10" />
-        <Splash class="w-40 h-16 opacity-60 animate-pulse" />
-        <p class="text-12-regular text-text-weak">
-          {slow() ? language.t("bootstrap.slow") : language.t("bootstrap.loading")}
-        </p>
-        <Show when={slow()}>
-          <div class="flex items-center gap-2">
-            <Button size="small" variant="secondary" onClick={retry}>
-              {language.t("bootstrap.retry")}
-            </Button>
-            <Button size="small" variant="ghost" onClick={() => navigate("/login", { replace: true })}>
-              {language.t("bootstrap.goToLogin")}
-            </Button>
-          </div>
-        </Show>
-      </div>
+      {/* 用 Portal 渲染到 document.body：splash 必须脱离 Layout 内容区——后者带 contain-strict
+          （CSS contain:strict 会创建新的 containing block），会让这里的 fixed 不再相对视口、而是相对
+          内容区（sidebar 右侧）→ logo 偏右（用户反馈「中→右」跳）。Portal 到 body 后 fixed inset-0
+          真正相对视口全屏居中，与 Layout 外的 ConnectionGate 启动 splash 位置完全重合，不再跳。 */}
+      <Portal>
+        <div class="fixed inset-0 z-50 flex flex-col items-center justify-center bg-background-base gap-4">
+          {/* splash 期间无 Titlebar，补顶部可拖动区保持与 login 一致 */}
+          <div data-tauri-drag-region class="absolute top-0 left-0 right-0 h-10" />
+          <Splash class="w-40 h-16 opacity-60 animate-pulse" />
+          <p class="text-12-regular text-text-weak">
+            {slow() ? language.t("bootstrap.slow") : language.t("bootstrap.loading")}
+          </p>
+          <Show when={slow()}>
+            <div class="flex items-center gap-2">
+              <Button size="small" variant="secondary" onClick={retry}>
+                {language.t("bootstrap.retry")}
+              </Button>
+              <Button size="small" variant="ghost" onClick={() => navigate("/login", { replace: true })}>
+                {language.t("bootstrap.goToLogin")}
+              </Button>
+            </div>
+          </Show>
+        </div>
+      </Portal>
     </Show>
   )
 }
