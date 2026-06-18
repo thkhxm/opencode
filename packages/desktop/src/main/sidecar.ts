@@ -141,6 +141,16 @@ function prepareSidecarEnv(password: string, userDataPath: string) {
     OPENCODE_SERVER_PASSWORD: password,
     XDG_STATE_HOME: process.env.XDG_STATE_HOME ?? userDataPath,
   })
+  // 模型限定治本：sidecar 进程一启动就预注入 enabled_providers:[punkcodeai] 基础 config，
+  // 让首次 provider.list（早于 renderer push 凭据）就只认 punkcodeai、过滤掉 models.dev 全量，
+  // 杜绝「登录前 eager fetch 抓到全量并被 query 缓存、push 后又不刷新」导致显示限定外模型。
+  // 仅当尚未注入时预设（push 已注入则不覆盖）；models 留空占位，push 时 applyPunkcodeCredentials
+  // 用 JSON.stringify 全量覆盖补上 apiKey + 真实模型列表（两处 enabled_providers 一致，无缝衔接）。
+  // baseUrl 由 electron.vite main.define 静态内联（sidecar 是 main build 的 input）。
+  if (!process.env.OPENCODE_CONFIG_CONTENT) {
+    const baseUrl = import.meta.env.PUNKCODE_API_BASE_URL || "http://localhost:38080"
+    process.env.OPENCODE_CONFIG_CONTENT = JSON.stringify(buildPunkcodeBaseConfig(baseUrl))
+  }
 }
 
 function ensureLoopbackNoProxy() {
@@ -255,6 +265,30 @@ function parseSetCredentialsCommand(value: unknown): SidecarCommand | undefined 
  * 在 HIDE_PROVIDER_UI 模式下也能让这个 provider 的模型出现在下拉里）。
  */
 const PUNKCODE_PROVIDER_ID = "punkcodeai"
+
+/**
+ * 模型限定治本：sidecar 启动时预注入的 punkcodeai 基础 config。
+ *
+ * 关键是 enabled_providers:[punkcodeai]——让 sidecar 从启动第一次 provider.list 起就只认 punkcodeai，
+ * 原生 provider（models.dev 全量 catalog）全被 isProviderAllowed 过滤，永不泄漏到模型下拉。
+ * models 留空（占位让 provider 定义结构合法，0 models 不会真发请求）；push 凭据时
+ * applyPunkcodeCredentials 用 JSON.stringify 全量覆盖该 env，补上 apiKey + 真实模型列表。
+ * 两处 enabled_providers 都是 [punkcodeai]，行为连续无冲突。
+ */
+function buildPunkcodeBaseConfig(baseUrl: string): Record<string, unknown> {
+  return {
+    enabled_providers: [PUNKCODE_PROVIDER_ID],
+    provider: {
+      [PUNKCODE_PROVIDER_ID]: {
+        name: "PunkcodeAI",
+        npm: "@ai-sdk/openai",
+        api: baseUrl,
+        options: { baseURL: baseUrl },
+        models: {},
+      },
+    },
+  }
+}
 
 /**
  * 判断一个 punkcode 模型是否支持 reasoning（思考模式）。
