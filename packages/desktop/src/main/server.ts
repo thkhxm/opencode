@@ -31,7 +31,10 @@ export type SidecarListener = {
 }
 
 const SIDECAR_SERVICE_NAME = "opencode server"
-const SIDECAR_START_STALL_TIMEOUT = 60_000
+// 启动慢修复：sidecar 'ready' 的 stall 超时从 60s 调短到 30s。
+// 配合 refreshTimeout（每收到一次 sqlite 进度就续期），正常迁移仍能续命；
+// 真卡住时 30s 即放弃, 给上层即时降级, 不再让用户干等一分钟。
+const SIDECAR_START_STALL_TIMEOUT = 30_000
 const SIDECAR_STOP_TIMEOUT = 6_000
 
 type SpawnLocalServerOptions = {

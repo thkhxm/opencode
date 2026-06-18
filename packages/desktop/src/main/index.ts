@@ -479,7 +479,8 @@ const main = Effect.gen(function* () {
       // doSpawn 在「目录已对齐」分支里会把 pending 凭据灌进去并设好 currentSidecarAccountID；
       // 这里再兜底对齐一次，覆盖 pending 凭据为空（纯切目录）等边界。
       if (pendingPunkcodeCredentials?.accountID) currentSidecarAccountID = pendingPunkcodeCredentials.accountID
-      await Promise.race([health.wait, new Promise<void>((resolve) => setTimeout(resolve, 30_000))])
+      // 启动慢修复：respawn 后 health 等待从 30s 调短到 15s（renderer 会自行重连, 等不到也不阻塞）。
+      await Promise.race([health.wait, new Promise<void>((resolve) => setTimeout(resolve, 15_000))])
     }
 
     const health = yield* Effect.promise(() => doSpawn(undefined))
@@ -489,8 +490,11 @@ const main = Effect.gen(function* () {
       password,
     })
 
+    // 启动慢修复：health 自检从 30s 调短到 15s。注意此自检不再 gate 主窗口创建——
+    // 主窗口在 serverReady 就绪后即可显示（见下方），renderer 通过 awaitInitialization(serverReady)
+    // 自行等服务就绪。这里的 health.wait 仅作后台健康观测/日志, 超时降级只记日志。
     yield* Effect.promise(() => health.wait).pipe(
-      Effect.timeout("30 seconds"),
+      Effect.timeout("15 seconds"),
       Effect.catch((e) =>
         Effect.sync(() => {
           logger.error("sidecar health check failed", e.toString())
@@ -514,10 +518,35 @@ const main = Effect.gen(function* () {
     }
   }
 
-  yield* Fiber.await(loadingTask)
-  setInitStep({ phase: "done" })
-
-  if (overlay) yield* Deferred.await(loadingComplete)
+  // 启动慢修复（主窗口与 sidecar 就绪解耦）：
+  //   旧实现这里 `Fiber.await(loadingTask)` 全程压住主窗口创建——串行等 sidecar 'ready'
+  //   + health 自检（最坏 stall 60s + health 30s），用户干瞪着没有窗口的桌面。
+  //   现在改为：
+  //     - 有 loading overlay（迁移中）→ 仍等迁移完成（loadingComplete）再开主窗口，
+  //       避免主 UI 在迁移中途抢跑；这条路径下迁移本就需要时间, 不是「启动慢」的病灶。
+  //     - 无 overlay → 只等 serverReady（sidecar 'ready' 即就绪）就开主窗口，
+  //       不再等后台 health 自检轮询。renderer 通过 awaitInitialization(serverReady) 自行
+  //       等服务可用（见 renderer/index.tsx: createResource(awaitInitialization)），
+  //       未就绪期间渲染轻量 loading 壳（背景色 + <Show> 兜底）, 不会白屏。
+  //   loadingTask 仍在后台跑完 health 自检（仅日志观测）, 不阻塞首屏。
+  if (overlay) {
+    yield* Fiber.await(loadingTask)
+    setInitStep({ phase: "done" })
+    yield* Deferred.await(loadingComplete)
+  } else {
+    // serverReady 在 loadingTask 内 sidecar 'ready' 后即被 succeed（见上方 Deferred.succeed(serverReady)）。
+    // 给一道保底超时（20s）：极端卡死时也要把窗口拉起来, 让 renderer 的 awaitInitialization
+    // + 自身重连/降级接管, 绝不让主进程在这里无限阻塞。
+    yield* Deferred.await(serverReady).pipe(
+      Effect.timeout("20 seconds"),
+      Effect.catch((e) =>
+        Effect.sync(() => {
+          logger.warn("server not ready before main window timeout, showing window anyway", e.toString())
+        }),
+      ),
+    )
+    setInitStep({ phase: "done" })
+  }
 
   mainWindow = createMainWindow()
   if (mainWindow) {
