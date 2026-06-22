@@ -213,7 +213,6 @@ function HomeDesign() {
         clearNotifications={clearNotifications}
         unseenCount={unseenCount}
         openSettings={openSettings}
-        openHelp={() => platform.openLink("https://opencode.ai/desktop-feedback")}
         language={language}
       />
 
@@ -293,7 +292,6 @@ function HomeProjectColumn(props: {
   clearNotifications: (project: LocalProject) => void
   unseenCount: (project: LocalProject) => number
   openSettings: () => void
-  openHelp: () => void
   language: ReturnType<typeof useLanguage>
 }) {
   const servers = useServers()
@@ -404,14 +402,6 @@ function HomeProjectColumn(props: {
         >
           <IconV2 name="settings-gear" size="small" />
           <span>{props.language.t("sidebar.settings")}</span>
-        </button>
-        <button
-          type="button"
-          class={`${HOME_PROJECT_NAV_ROW} text-v2-text-text-faint [&>[data-slot=icon-svg]]:text-v2-icon-icon-muted`}
-          onClick={props.openHelp}
-        >
-          <IconV2 name="help" size="small" />
-          <span>{props.language.t("sidebar.help")}</span>
         </button>
       </div>
     </aside>
