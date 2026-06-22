@@ -20,8 +20,8 @@ export const ConfirmDialog: Component<{
 }> = (props) => {
   const dialog = useDialog()
   return (
-    <Dialog title={props.title} size="normal">
-      <div class="flex flex-col gap-5 px-2.5 pb-1">
+    <Dialog title={props.title} fit>
+      <div class="flex flex-col gap-5 px-5 pb-5">
         <p class="text-14-regular text-text-base">{props.message}</p>
         <div class="flex justify-end gap-3">
           <Button variant="ghost" onClick={() => dialog.close()}>
