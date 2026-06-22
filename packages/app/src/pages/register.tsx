@@ -72,6 +72,7 @@ const Register: Component = () => {
         <form class="flex flex-col gap-3 w-full" onSubmit={onSubmit}>
           <TextField
             label={language.t("auth.login.email")}
+            description={language.t("auth.register.emailHint")}
             type="email"
             autocomplete="username"
             required
@@ -81,6 +82,7 @@ const Register: Component = () => {
           />
           <TextField
             label={language.t("auth.login.password")}
+            description={language.t("auth.register.passwordHint")}
             type="password"
             autocomplete="new-password"
             required
@@ -99,6 +101,7 @@ const Register: Component = () => {
           />
           <TextField
             label={language.t("auth.register.nickname")}
+            description={language.t("auth.register.nicknameHint")}
             type="text"
             autocomplete="name"
             required

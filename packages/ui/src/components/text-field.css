@@ -130,5 +130,19 @@
       line-height: 18px; /* 150% */
       letter-spacing: var(--letter-spacing-normal);
     }
+
+    /* 字段说明/提示文案。此前无样式 → 裸渲染成纯黑(深色背景下几乎不可见)。
+       补主题感知的弱化灰(同 label 的 --text-weak)，保证浅色/深色主题下都清晰可读。 */
+    [data-slot="input-description"] {
+      color: var(--text-weak);
+
+      /* text-12-regular */
+      font-family: var(--font-family-sans);
+      font-size: var(--font-size-small);
+      font-style: normal;
+      font-weight: var(--font-weight-regular);
+      line-height: 18px; /* 150% */
+      letter-spacing: var(--letter-spacing-normal);
+    }
   }
 }

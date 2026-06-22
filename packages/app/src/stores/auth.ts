@@ -980,6 +980,10 @@ async function bootstrapInner(): Promise<void> {
     setSyncedAccountID(next.accountID)
     applySession(next)
     notifyCredentialsPushed()
+    // 余额/今日用量立即刷新：bootstrap 为不 gate 启动只置占位 0（见上），这里在会话落地后 fire-and-forget
+    // 拉一发 /cli/me，让右上角余额一进界面就刷新，而非等 BalanceWidget 的 30s 轮询或手动点刷新。
+    // 不 await：不阻塞 bootstrap 完成 / splash 退场；失败由 widget 的 onMount 首拉 + 30s 轮询兜底。
+    void refreshMeCore()
   } catch {
     // refresh_token 过期 / 网络故障 / sk-key 拉取失败 → 清 sidecar 凭据 + 清持久化，让用户重新登录。
     // 清 sidecar 是 M9 关键：避免上一次会话残留在 sidecar 进程里的旧账号 key 继续被用于聊天。

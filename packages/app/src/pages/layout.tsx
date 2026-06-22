@@ -2458,9 +2458,21 @@ export default function Layout(props: ParentProps) {
             <button
               type="button"
               class="flex items-center min-w-0 px-2 py-1.5 rounded-md text-12-regular text-text-weak hover:bg-surface-base"
-              onClick={async () => {
-                await auth.signOut()
-                navigate("/login", { replace: true })
+              onClick={() => {
+                void import("@/components/dialog-confirm").then((m) => {
+                  dialog.show(() => (
+                    <m.ConfirmDialog
+                      title={language.t("auth.logout.confirmTitle")}
+                      message={language.t("auth.logout.confirmMessage")}
+                      confirmLabel={language.t("account.logout")}
+                      cancelLabel={language.t("common.cancel")}
+                      onConfirm={async () => {
+                        await auth.signOut()
+                        navigate("/login", { replace: true })
+                      }}
+                    />
+                  ))
+                })
               }}
             >
               <span class="truncate">{language.t("account.logout")}</span>

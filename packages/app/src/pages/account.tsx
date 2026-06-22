@@ -29,9 +29,21 @@ const Account: Component = () => {
   const language = useLanguage()
   const dialog = useDialog()
 
-  async function onLogout() {
-    await auth.signOut()
-    navigate("/login", { replace: true })
+  function onLogout() {
+    void import("@/components/dialog-confirm").then((m) => {
+      dialog.show(() => (
+        <m.ConfirmDialog
+          title={language.t("auth.logout.confirmTitle")}
+          message={language.t("auth.logout.confirmMessage")}
+          confirmLabel={language.t("account.logout")}
+          cancelLabel={language.t("common.cancel")}
+          onConfirm={async () => {
+            await auth.signOut()
+            navigate("/login", { replace: true })
+          }}
+        />
+      ))
+    })
   }
 
   function openTopup() {
