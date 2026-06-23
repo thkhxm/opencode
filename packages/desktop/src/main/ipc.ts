@@ -248,14 +248,31 @@ export function registerIpcHandlers(deps: Deps) {
   })
 }
 
+/**
+ * 安全地向某个窗口 webContents 发 IPC：窗口或其 webContents 已销毁时静默跳过。
+ *
+ * 这些 send* 辅助函数持有的是主进程缓存的窗口引用（如 loading overlay / mainWindow），
+ * 引用可能已 close/destroy 但变量未置空——此时直接 `webContents.send` 会抛
+ * `TypeError: Object has been destroyed`，进而触发主进程 Uncaught Exception 崩溃。
+ * 典型场景：登录切账号 → respawn sidecar → 新账号 db 迁移又 emit sqlite 进度，
+ * 而启动期的 loading overlay 早已 close（见 index.ts overlay?.close()），旧的
+ * `if (overlay)` 仅判空、判不出"已销毁"，于是把进度发给死窗口而崩溃。
+ */
+function safeSend(win: BrowserWindow, channel: string, ...args: unknown[]) {
+  if (win.isDestroyed()) return
+  const wc = win.webContents
+  if (!wc || wc.isDestroyed()) return
+  wc.send(channel, ...args)
+}
+
 export function sendSqliteMigrationProgress(win: BrowserWindow, progress: SqliteMigrationProgress) {
-  win.webContents.send("sqlite-migration-progress", progress)
+  safeSend(win, "sqlite-migration-progress", progress)
 }
 
 export function sendMenuCommand(win: BrowserWindow, id: string) {
-  win.webContents.send("menu-command", id)
+  safeSend(win, "menu-command", id)
 }
 
 export function sendDeepLinks(win: BrowserWindow, urls: string[]) {
-  win.webContents.send("deep-link", urls)
+  safeSend(win, "deep-link", urls)
 }

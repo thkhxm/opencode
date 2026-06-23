@@ -586,7 +586,11 @@ const main = Effect.gen(function* () {
     })
   }
 
+  // 关闭 loading overlay 后必须立即置空：initEmitter.on("sqlite") 闭包仍引用 overlay，
+  // 若不置空，登录切账号触发的二次 db 迁移会把进度发给这个已销毁的窗口 → 主进程崩溃。
+  // （send 层已有 safeSend 兜底，这里再断引用，避免对死窗口做无谓 send。）
   overlay?.close()
+  overlay = null
 })
 
 Effect.runFork(main)
