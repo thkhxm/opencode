@@ -1,0 +1,59 @@
+# PunkcodeAI 桌面端打包（GitLab CI/CD，自托管 GitLab + 自托管 Mac/Win runner）。
+# 与 GitHub Actions 的 .github/workflows/punkcode-desktop.yml 等价。
+# imagegen 已 vendor 进本仓（packages/desktop/skills/imagegen），无需 checkout sub2api，单仓即可构建。
+#
+# 触发：推 tag `desktop-v*`，或在 GitLab Web UI 手动 Run pipeline（Build → Pipelines → Run pipeline）。
+# 前提：注册带 tag 的 shell executor runner ——
+#   - 一台 Mac 打 `macos` 标签（需 bun / git / xcode-select --install）；
+#   - 一台 Windows 打 `windows` 标签（需 bun / git）。
+# 产物作为 job artifacts，可在 Pipeline 页按 job 下载；下载后用 deploy/publish-desktop-update*.* 发到自建 /updates。
+
+stages:
+  - build
+
+variables:
+  PUNKCODE_CHANNEL: "prod"
+  GIT_DEPTH: "1"
+
+# 仅在打 desktop-v* tag 或 Web 手动触发时跑（避免每次 push 都构建）
+.desktop_rules: &desktop_rules
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^desktop-v/'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+
+build:mac:
+  stage: build
+  <<: *desktop_rules
+  tags: [macos] # 落到你的 Mac self-hosted runner（shell executor）
+  script:
+    - bun install
+    - cd packages/desktop
+    - bun run build
+    - bun run package:mac
+  artifacts:
+    name: "desktop-mac-arm64"
+    when: always
+    paths:
+      - packages/desktop/dist/*.dmg
+      - packages/desktop/dist/*.zip
+      - packages/desktop/dist/*.blockmap
+      - packages/desktop/dist/latest-mac.yml
+    expire_in: 2 weeks
+
+build:win:
+  stage: build
+  <<: *desktop_rules
+  tags: [windows] # 落到你的 Windows self-hosted runner（shell executor，默认 PowerShell）
+  script:
+    - bun install
+    - cd packages/desktop
+    - bun run build
+    - bun run package:win
+  artifacts:
+    name: "desktop-win-x64"
+    when: always
+    paths:
+      - packages/desktop/dist/*.exe
+      - packages/desktop/dist/*.blockmap
+      - packages/desktop/dist/latest.yml
+    expire_in: 2 weeks

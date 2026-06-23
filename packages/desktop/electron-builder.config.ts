@@ -61,8 +61,10 @@ const getBase = (): Configuration => ({
     {
       // imagegen skill：打包后随 app 拷到 resources/skills/imagegen，
       // 主进程在 app.isPackaged 时用 join(process.resourcesPath, "skills", "imagegen") 找它（见 main/index.ts）。
-      // from 相对本配置文件（packages/desktop）：../../.. = D:/project，再进 sub2api/skills/imagegen。
-      from: "../../../sub2api/skills/imagegen",
+      // 已 vendor 进本仓 packages/desktop/skills/imagegen（去掉对 sub2api 的跨仓构建依赖，便于 GitLab/GitHub CI）；
+      // 若 sub2api 侧 imagegen 有更新，需手动重新 vendor（复制覆盖 packages/desktop/skills/imagegen）。
+      // from 相对本配置文件（packages/desktop）。
+      from: "skills/imagegen",
       to: "skills/imagegen",
     },
   ],

@@ -40,19 +40,11 @@ jobs:
             artifact: desktop-win-x64
     runs-on: ${{ matrix.os }}
     steps:
-      # opencode（桌面端本体）——用触发分支/标签的代码
+      # opencode（桌面端本体）——用触发分支/标签的代码。imagegen 已 vendor 进本仓，无需再 checkout sub2api。
       - name: Checkout opencode
         uses: actions/checkout@v4
         with:
           path: opencode
-
-      # sub2api（仅取 skills/imagegen，opencode 打包 extraResources 引用它）——必须与 opencode 同级
-      - name: Checkout sub2api (skills/imagegen)
-        uses: actions/checkout@v4
-        with:
-          repository: thkhxm/sub2api
-          ref: feat/punkcode-integration
-          path: sub2api
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
