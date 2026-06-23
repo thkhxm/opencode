@@ -267,6 +267,32 @@ function parseSetCredentialsCommand(value: unknown): SidecarCommand | undefined 
 const PUNKCODE_PROVIDER_ID = "punkcodeai"
 
 /**
+ * PunkcodeAI provider 的「响应头超时」(headerTimeout)：等待上游返回首个响应头的最长时间(毫秒)。
+ *
+ * 背景(大文件超时)：punkcodeai 走 sub2api 网关，日常常处理大 PDF 等大文件——上游模型要先把
+ * 整份文件吃进上下文才会吐出第一个响应头。opencode core 给该 provider 的默认值是 10s
+ * (provider.ts 的 OPENAI_HEADER_TIMEOUT_DEFAULT，从 openai provider 照搬而来)，对大文件远远不够，
+ * 会抛 HeaderTimeoutError("Provider response headers timed out after 10000ms") 并被无限重试
+ * (用户截图里"第 48 次")。这里在桌面端注入的 provider config.options 里显式放宽——config 在
+ * provider 初始化时【最后 merge】，会覆盖 core 的 10s 默认(见 provider.ts state 构建末尾的 re-apply)。
+ *
+ * 默认 30 分钟，足以覆盖超大文件的首字节延迟；可用环境变量 PUNKCODE_HEADER_TIMEOUT_MS 覆盖：
+ * 正整数=毫秒；<=0=关闭该超时(永不因首字节慢而中断，等同上游自己的连接超时)。
+ *
+ * 注：punkcodeai 不设 chunkTimeout / 总 timeout，所以 headerTimeout 是唯一会掐断请求的超时，
+ * 放宽它即可彻底解决大文件超时；放宽后真·死连接的兜底由 TCP/网关侧超时承担。
+ */
+const PUNKCODE_HEADER_TIMEOUT_DEFAULT_MS = 30 * 60 * 1000
+function punkcodeHeaderTimeoutMs(): number | false {
+  const raw = process.env.PUNKCODE_HEADER_TIMEOUT_MS
+  if (raw !== undefined && raw.trim() !== "") {
+    const parsed = Number.parseInt(raw, 10)
+    if (Number.isFinite(parsed)) return parsed > 0 ? parsed : false
+  }
+  return PUNKCODE_HEADER_TIMEOUT_DEFAULT_MS
+}
+
+/**
  * 模型限定治本：sidecar 启动时预注入的 punkcodeai 基础 config。
  *
  * 关键是 enabled_providers:[punkcodeai]——让 sidecar 从启动第一次 provider.list 起就只认 punkcodeai，
@@ -283,7 +309,8 @@ function buildPunkcodeBaseConfig(baseUrl: string): Record<string, unknown> {
         name: "PunkcodeAI",
         npm: "@ai-sdk/openai",
         api: baseUrl,
-        options: { baseURL: baseUrl },
+        // headerTimeout：放宽响应头超时(默认 30 分钟)，避免大 PDF 等大文件因 core 默认 10s 而超时重试。
+        options: { baseURL: baseUrl, headerTimeout: punkcodeHeaderTimeoutMs() },
         models: {},
       },
     },
@@ -389,6 +416,10 @@ async function applyPunkcodeCredentials(credentials: SetCredentialsCommand["cred
             // 鉴权保持 sk-key（Authorization: Bearer sk-...，sub2api ApiKeyAuth 认得），不切 OAuth。
             baseURL: credentials.baseUrl,
             apiKey: credentials.apiKey,
+            // headerTimeout：放宽响应头超时(默认 30 分钟，可用 PUNKCODE_HEADER_TIMEOUT_MS 覆盖)。
+            // 大 PDF 等大文件上游需先吃完整份文件才吐首个响应头，core 默认 10s 会触发
+            // HeaderTimeoutError 无限重试；config.options 最后 merge，覆盖该默认。
+            headerTimeout: punkcodeHeaderTimeoutMs(),
           },
           models,
         },

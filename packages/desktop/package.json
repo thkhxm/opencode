@@ -2,7 +2,7 @@
   "name": "@opencode-ai/desktop",
   "description": "PunkcodeAI 桌面端 — 基于 OpenCode 框架二次开发的 AI 编码工作站",
   "private": true,
-  "version": "1.15.34",
+  "version": "1.15.35",
   "type": "module",
   "license": "MIT",
   "homepage": "https://punkcodeai.myverse.site",
