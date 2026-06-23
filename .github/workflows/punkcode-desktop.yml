@@ -1,0 +1,96 @@
+# PunkcodeAI 桌面端打包（fork 专属，与上游 sst/opencode 的 workflow 无关）。
+#
+# 在 GitHub 托管 runner 上同时打 macOS(arm64) 与 Windows(x64) 包：
+#   - macOS  : macos-14 (Apple Silicon) → dmg + zip（未签名 + ad-hoc，内部使用）
+#   - Windows: windows-latest (x64)     → nsis 安装版 + portable 便携版（未签名）
+# 产物作为 artifacts 上传，下载后用 deploy/publish-desktop-update*.* 发布到自建 /updates。
+#
+# 触发：Actions 页手动 Run（可选 channel），或推 tag `desktop-v*`。
+# 前提：fork 仓需在 Settings → Actions 里启用 workflow。公开仓 runner 免费。
+name: 桌面端打包
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "发布渠道 (prod/beta/dev)"
+        type: choice
+        options: [prod, beta, dev]
+        default: prod
+  push:
+    tags:
+      - "desktop-v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: 打包 ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 默认覆盖 Apple Silicon + 主流 Windows；要加 Intel mac 用 macos-13/platform mac，要加 win arm64 另配。
+          - os: macos-14
+            platform: mac
+            artifact: desktop-mac-arm64
+          - os: windows-latest
+            platform: win
+            artifact: desktop-win-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      # opencode（桌面端本体）——用触发分支/标签的代码
+      - name: Checkout opencode
+        uses: actions/checkout@v4
+        with:
+          path: opencode
+
+      # sub2api（仅取 skills/imagegen，opencode 打包 extraResources 引用它）——必须与 opencode 同级
+      - name: Checkout sub2api (skills/imagegen)
+        uses: actions/checkout@v4
+        with:
+          repository: thkhxm/sub2api
+          ref: feat/punkcode-integration
+          path: sub2api
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: 安装依赖
+        working-directory: opencode
+        run: bun install
+
+      # native（mac 原生窗口模块）当前为空目录且未纳入 git；建空目录让 extraResources 的 from: native/ 不报错。
+      # 注意：mac 原生窗口特性(毛玻璃/自定义标题栏)会缺失，但 app 可正常构建与运行。
+      - name: 占位 native 目录
+        working-directory: opencode/packages/desktop
+        shell: bash
+        run: mkdir -p native
+
+      - name: 构建（renderer + sidecar）
+        working-directory: opencode/packages/desktop
+        env:
+          PUNKCODE_CHANNEL: ${{ github.event.inputs.channel || 'prod' }}
+        run: bun run build
+
+      - name: 打包（${{ matrix.platform }}，未签名）
+        working-directory: opencode/packages/desktop
+        env:
+          PUNKCODE_CHANNEL: ${{ github.event.inputs.channel || 'prod' }}
+        run: bun run package:${{ matrix.platform }}
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            opencode/packages/desktop/dist/*.dmg
+            opencode/packages/desktop/dist/*.zip
+            opencode/packages/desktop/dist/*.exe
+            opencode/packages/desktop/dist/*.blockmap
+            opencode/packages/desktop/dist/latest*.yml
+          if-no-files-found: error
+          retention-days: 14
