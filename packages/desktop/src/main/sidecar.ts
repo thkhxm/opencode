@@ -97,6 +97,11 @@ async function start(command: StartCommand) {
     await Log.init({ level: "WARN" })
 
     if (command.needsMigration) {
+      // 先推一个 0% 进度：让加载窗口立刻从静止的 "Just a moment..." 切到 "Migrating your database"，
+      // 同时重置主进程侧 sidecar 就绪的 stall 计时（SIDECAR_START_STALL_TIMEOUT）——避免首启时
+      // Database.Client() 的 schema 迁移（在下一行作为参数同步执行、期间不发任何进度）把就绪计时耗尽
+      // 而被误判卡死 kill。Database.Client() 在本条 postMessage 之后才求值，故顺序正确。
+      parentPort.postMessage({ type: "sqlite", progress: { type: "InProgress", value: 0 } })
       await JsonMigration.run(drizzle({ client: Database.Client().$client }), {
         progress: (event: { current: number; total: number }) => {
           parentPort.postMessage({

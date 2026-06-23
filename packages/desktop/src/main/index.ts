@@ -502,7 +502,34 @@ const main = Effect.gen(function* () {
     const savedAccountID = getLastAccountID()
     const initialAccountPath = accountDataPathFor(savedAccountID ?? undefined)
     if (savedAccountID) currentSidecarAccountID = savedAccountID
-    const health = yield* Effect.promise(() => doSpawn(initialAccountPath))
+    // 启动韧性（修复偶发卡死在加载页 "Just a moment..." 不动，Windows 等环境高发）：
+    //   旧实现 `Effect.promise(() => doSpawn(...))` 在 doSpawn 失败/卡住（sidecar 起不来：杀软拦截、
+    //   权限、家目录被重定向、db 被占用等环境因素）时会让 loadingTask 直接 die，导致 serverReady
+    //   永不兑现 → renderer 的 awaitInitialization 永远 pending → 界面永久冻结在 loading，无重试/无报错。
+    //   现在：(1) 首次 spawn 失败自动重试若干次；(2)【无论成败最终都兑现 serverReady】，让 renderer
+    //   进入主界面，由其自身的连接/健康检查/重连 UI 兜底（显示连接失败并可重试，而不是永久卡死）。
+    //   happy path（首次即成功）行为完全不变。
+    const spawnWithRetry = async (): Promise<Awaited<ReturnType<typeof doSpawn>> | undefined> => {
+      const maxAttempts = 3
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+          return await doSpawn(initialAccountPath)
+        } catch (e) {
+          writeLog(
+            "utility",
+            `initial sidecar spawn failed (attempt ${attempt}/${maxAttempts})`,
+            { error: String(e) },
+            "error",
+          )
+          if (attempt < maxAttempts) await new Promise((resolve) => setTimeout(resolve, 1000))
+        }
+      }
+      writeLog("utility", "initial sidecar spawn failed after retries; proceeding so renderer can recover", {}, "error")
+      return undefined
+    }
+    const health = yield* Effect.promise(spawnWithRetry)
+
+    // 关键：serverReady 必须兑现——哪怕 sidecar 最终没起来。否则 renderer 永久卡在 loading。
     yield* Deferred.succeed(serverReady, {
       url,
       username: "opencode",
@@ -512,14 +539,17 @@ const main = Effect.gen(function* () {
     // 启动慢修复：health 自检从 30s 调短到 15s。注意此自检不再 gate 主窗口创建——
     // 主窗口在 serverReady 就绪后即可显示（见下方），renderer 通过 awaitInitialization(serverReady)
     // 自行等服务就绪。这里的 health.wait 仅作后台健康观测/日志, 超时降级只记日志。
-    yield* Effect.promise(() => health.wait).pipe(
-      Effect.timeout("15 seconds"),
-      Effect.catch((e) =>
-        Effect.sync(() => {
-          logger.error("sidecar health check failed", e.toString())
-        }),
-      ),
-    )
+    // sidecar 没起来（health 为 undefined）时跳过自检。
+    if (health) {
+      yield* Effect.promise(() => health.wait).pipe(
+        Effect.timeout("15 seconds"),
+        Effect.catch((e) =>
+          Effect.sync(() => {
+            logger.error("sidecar health check failed", e.toString())
+          }),
+        ),
+      )
+    }
 
     logger.log("loading task finished")
   }).pipe(Effect.forkChild)
