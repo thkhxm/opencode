@@ -82,7 +82,7 @@ jobs:
           PUNKCODE_CHANNEL: ${{ github.event.inputs.channel || 'prod' }}
         run: bun run package:${{ matrix.platform }}
 
-      - name: 上传产物
+      - name: 上传产物 (Actions Artifacts)
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
@@ -94,3 +94,32 @@ jobs:
             opencode/packages/desktop/dist/latest*.yml
           if-no-files-found: error
           retention-days: 14
+
+  # tag 触发时把两端平台包挂到 GitHub Release（Release 页就能直接下载 dmg/exe/zip，
+  # 不必去 Actions 的 Artifacts 里找；workflow_dispatch 手动跑则只产 Artifacts、不发 Release）。
+  release:
+    name: 发布 Release（附平台包）
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/desktop-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: 下载两端产物
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: 创建/更新 Release 并附 dmg/exe/zip
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          files=$(find dist -type f)
+          echo "附件:"; echo "$files"
+          if gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload "${{ github.ref_name }}" $files --clobber --repo "${{ github.repository }}"
+          else
+            gh release create "${{ github.ref_name }}" $files \
+              --repo "${{ github.repository }}" \
+              --title "PunkcodeAI Desktop ${{ github.ref_name }}" \
+              --notes "macOS(arm64) + Windows(x64) 未签名内部版。自动更新走自建 /updates。"
+          fi
