@@ -117,7 +117,14 @@ const getBase = (): Configuration => ({
     verifyUpdateCodeSignature: false,
   },
   nsis: {
-    oneClick: true,
+    // 让用户手动安装时能选安装目录：
+    //   - oneClick:false → 带向导 UI 的安装器(不再是无界面一键装)，才会出现目录选择页
+    //   - allowToChangeInstallationDirectory:true → 显示"选择安装位置"页
+    //   - perMachine:false → 默认按当前用户安装(无需管理员)；用户在目录页选到受保护目录(如 Program Files)时
+    //     NSIS 会自动请求提权(allowElevation 默认开)。
+    // 对自动更新无影响：electron-updater 升级时以 /S 静默运行安装器、沿用已有安装目录，用户感知不到目录页。
+    oneClick: false,
+    allowToChangeInstallationDirectory: true,
     perMachine: false,
     // TODO M9: replace with PunkcodeAI logo when user provides
     installerIcon: `resources/icons/icon.ico`,
