@@ -66,6 +66,21 @@ const getBase = (): Configuration => ({
       to: "skills/imagegen",
     },
   ],
+  // 未签名 mac 构建（无苹果凭据）补 ad-hoc 签名：Apple Silicon 要求二进制至少 ad-hoc 签名才能启动，
+  // 否则用户双击报"已损坏/无法打开"。仅在未签名 + darwin 时执行；失败不阻断打包（可手动补签）。
+  afterPack: async (context) => {
+    if (macSign || context.electronPlatformName !== "darwin") return
+    const { readdirSync } = await import("node:fs")
+    const appName = readdirSync(context.appOutDir).find((n) => n.endsWith(".app"))
+    if (!appName) return
+    const appPath = path.join(context.appOutDir, appName)
+    try {
+      await execFileAsync("codesign", ["--force", "--deep", "--sign", "-", appPath])
+      console.log(`[afterPack] 未签名构建：已对 ${appName} 做 ad-hoc 签名（保证 Apple Silicon 可启动）`)
+    } catch (e) {
+      console.warn(`[afterPack] ad-hoc 签名失败，arm64 上可能无法直接启动，需手动: codesign --force --deep -s - "${appPath}"`, e)
+    }
+  },
   mac: {
     category: "public.app-category.developer-tools",
     // TODO M9: replace with PunkcodeAI logo when user provides
