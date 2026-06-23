@@ -40,6 +40,11 @@ const channel = (() => {
  */
 const updateFeedUrl = process.env.PUNKCODE_UPDATE_FEED_URL ?? "https://punkcodeai.myverse.site/updates"
 
+// macOS 签名/公证开关：仅当提供了苹果凭据时启用（签名 + 公证，用户双击即用）；
+// 否则产未签名包——内部使用 OK，用户首次打开右键→打开 或 `xattr -dr com.apple.quarantine` 绕过 Gatekeeper。
+// 这样无需改代码即可在"有/无苹果开发者账号"间切换：配了 APPLE_TEAM_ID / APPLE_API_KEY / CSC_LINK 就自动走签名+公证。
+const macSign = !!(process.env.APPLE_TEAM_ID || process.env.APPLE_API_KEY || process.env.CSC_LINK)
+
 const getBase = (): Configuration => ({
   artifactName: "PunkcodeAI-${os}-${arch}.${ext}",
   directories: {
@@ -65,15 +70,18 @@ const getBase = (): Configuration => ({
     category: "public.app-category.developer-tools",
     // TODO M9: replace with PunkcodeAI logo when user provides
     icon: `resources/icons/icon.icns`,
-    hardenedRuntime: true,
+    // hardenedRuntime / notarize 仅在签名时有意义；未签名时关掉，避免 electron-builder 因缺证书而失败。
+    hardenedRuntime: macSign,
     gatekeeperAssess: false,
     entitlements: "resources/entitlements.plist",
     entitlementsInherit: "resources/entitlements.plist",
-    notarize: true,
+    notarize: macSign,
+    // 无苹果凭据时显式关闭代码签名（identity: null），否则会因找不到 Developer ID 证书而报错。
+    ...(macSign ? {} : { identity: null }),
     target: ["dmg", "zip"],
   },
   dmg: {
-    sign: true,
+    sign: macSign,
   },
   // 内部协议保持 opencode://（CLI / sidecar 已硬编码），用户感知不到 URL 协议
   protocols: {
