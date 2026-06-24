@@ -7,7 +7,7 @@ import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { getCACertificates, setDefaultCACertificates } from "node:tls"
 import type { Event } from "electron"
-import { app, BrowserWindow } from "electron"
+import { app, BrowserWindow, Notification } from "electron"
 
 import contextMenu from "electron-context-menu"
 
@@ -72,6 +72,24 @@ function useEnvProxy() {
     ;(http as any).setGlobalProxyFromEnv()
   } catch (error) {
     logger.warn("failed to load proxy environment", error)
+  }
+}
+
+/**
+ * 兜底导入提示: 旧渠道库历史会话被接管时, 弹一条系统通知告知用户"已恢复 N 个历史会话",
+ * 避免用户更新后看到会话变化却不明所以。一次性事件(sidecar 侧用标记保证只触发一次)。
+ */
+function notifySessionImport(count: number, from: string) {
+  if (count <= 0) return
+  writeLog("utility", "sessions imported from previous channel db", { count, from })
+  try {
+    if (!Notification.isSupported()) return
+    new Notification({
+      title: app.getName(),
+      body: `已从旧版本恢复 ${count} 个历史会话`,
+    }).show()
+  } catch (error) {
+    writeLog("utility", "failed to show session-import notification", { error: String(error) }, "warn")
   }
 }
 
@@ -435,6 +453,7 @@ const main = Effect.gen(function* () {
         userDataPath: app.getPath("userData"),
         accountDataPath,
         onSqliteProgress: (progress) => initEmitter.emit("sqlite", progress),
+        onSessionsImported: (count, from) => notifySessionImport(count, from),
         onStdout: (message) => writeLog("server", "stdout", { message }),
         onStderr: (message) => writeLog("server", "stderr", { message }, "warn"),
         onExit: (code) => writeLog("utility", "sidecar exited", { code }, "warn"),

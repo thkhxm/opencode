@@ -3,9 +3,13 @@ import { $ } from "bun"
 export type Channel = "dev" | "beta" | "prod"
 
 export function resolveChannel(): Channel {
-  const raw = Bun.env.OPENCODE_CHANNEL
+  // 与 electron.vite.config.ts 完全一致: 优先 PUNKCODE_CHANNEL, 兼容旧名 OPENCODE_CHANNEL, 默认 prod。
+  // 默认 prod(不是 dev): 漏设环境变量时也应产出正式渠道——否则图标/metainfo/核心 dist 渠道会各走各的,
+  // 尤其核心 dist 的渠道决定 SQLite 库文件名(getChannelPath), 渠道漂移会导致更新后读到空库、会话"消失"。
+  const raw = Bun.env.PUNKCODE_CHANNEL ?? Bun.env.OPENCODE_CHANNEL
   if (raw === "dev" || raw === "beta" || raw === "prod") return raw
-  return "dev"
+  if (raw === "latest") return "prod"
+  return "prod"
 }
 
 export const SIDECAR_BINARIES: Array<{ rustTarget: string; ocBinary: string; assetExt: string }> = [

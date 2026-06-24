@@ -16,6 +16,7 @@ type SidecarMessage =
   | { type: "ready" }
   | { type: "stopped" }
   | { type: "credentials-updated" }
+  | { type: "sessions-imported"; count: number; from: string }
   | { type: "error"; error: { message: string; stack?: string } }
 
 export type SidecarListener = {
@@ -52,6 +53,8 @@ type SpawnLocalServerOptions = {
    */
   accountDataPath?: string
   onSqliteProgress?: (progress: SqliteMigrationProgress) => void
+  /** 兜底导入完成回调: 旧渠道库历史会话被接管时上报(数量 + 来源库名), 主进程据此提示用户。 */
+  onSessionsImported?: (count: number, from: string) => void
   onStdout?: (message: string) => void
   onStderr?: (message: string) => void
   onExit?: (code: number) => void
@@ -228,7 +231,13 @@ export async function spawnLocalServer(
   let pendingCredentialsAck: (() => void) | undefined
   child.on("message", (raw: unknown) => {
     if (!raw || typeof raw !== "object") return
-    if ((raw as { type?: unknown }).type !== "credentials-updated") return
+    const type = (raw as { type?: unknown }).type
+    if (type === "sessions-imported") {
+      const msg = raw as { count?: unknown; from?: unknown }
+      options.onSessionsImported?.(Number(msg.count) || 0, typeof msg.from === "string" ? msg.from : "")
+      return
+    }
+    if (type !== "credentials-updated") return
     if (pendingCredentialsAck) {
       const resolver = pendingCredentialsAck
       pendingCredentialsAck = undefined

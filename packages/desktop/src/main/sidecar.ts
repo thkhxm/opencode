@@ -1,4 +1,7 @@
 import { drizzle } from "drizzle-orm/node-sqlite/driver"
+import { DatabaseSync } from "node:sqlite"
+import { existsSync, copyFileSync, renameSync, readdirSync, writeFileSync } from "node:fs"
+import path from "node:path"
 import * as http from "node:http"
 import * as tls from "node:tls"
 
@@ -54,6 +57,7 @@ type SidecarMessage =
   | { type: "ready" }
   | { type: "stopped" }
   | { type: "credentials-updated" }
+  | { type: "sessions-imported"; count: number; from: string }
   | { type: "error"; error: { message: string; stack?: string } }
 
 type ParentPort = {
@@ -87,6 +91,94 @@ parentPort.on("message", (event) => {
   }
 })
 
+type SeedResult = { count: number; from: string }
+
+/** 数会话表行数(文件不存在 / 表缺失 / 打不开都按 0 处理, 不抛)。 */
+function countSessionRows(dbPath: string): number {
+  if (!existsSync(dbPath)) return 0
+  let db: DatabaseSync | undefined
+  try {
+    db = new DatabaseSync(dbPath)
+    const row = db.prepare("SELECT count(*) AS c FROM session").get() as { c?: number } | undefined
+    return Number(row?.c ?? 0)
+  } catch {
+    return 0
+  } finally {
+    try {
+      db?.close()
+    } catch {}
+  }
+}
+
+/**
+ * 兜底导入(根治"渠道切换后历史会话消失"):
+ * 当前渠道库(opencode.db)为空、而同目录存在非空旧渠道库(opencode-<旧渠道>.db)时,
+ * 把会话最多的那个旧库连同 wal/shm 文件级拷成 opencode.db, 让新版本直接接管历史会话。
+ * 必须在打开任何 db 之前调用(拷完再由 Database.Client 打开并迁移到当前 schema)。
+ *
+ * 安全约束:
+ * - 一次性: 同目录 .session-seed-checked 标记, 查过就不再动(用户日后自己清空会话不会被重新导入)。
+ * - 非破坏: 覆盖前把已存在的 opencode.db(及 wal/shm)改名 *.pre-seed 备份。
+ * - 失败绝不阻断启动(全程 try/catch)。
+ *
+ * getTargetPath = () => Database.getPath(): 复用核心库路径逻辑(随 XDG_DATA_HOME 账号隔离 + 渠道)。
+ */
+function seedSessionsFromPreviousChannel(getTargetPath: () => string): SeedResult | null {
+  let target: string
+  try {
+    target = getTargetPath()
+  } catch {
+    return null
+  }
+  if (!target || !target.endsWith(".db")) return null // :memory: / 异常路径不处理
+  const dir = path.dirname(target)
+  const marker = path.join(dir, ".session-seed-checked")
+  if (existsSync(marker)) return null
+
+  let result: SeedResult | null = null
+  try {
+    if (countSessionRows(target) === 0) {
+      // 当前库空: 在同目录找其它渠道库, 选会话最多的非空库作为来源
+      let best: { file: string; count: number } | null = null
+      let names: string[] = []
+      try {
+        names = readdirSync(dir)
+      } catch {}
+      for (const name of names) {
+        if (!/^opencode-.+\.db$/.test(name)) continue // 仅匹配 opencode-<渠道>.db
+        if (name === "opencode-dev.db") continue // dev 是有意隔离的独立渠道, 不导入以免污染 prod
+        const full = path.join(dir, name)
+        if (full === target) continue
+        const c = countSessionRows(full)
+        if (c > 0 && (!best || c > best.count)) best = { file: full, count: c }
+      }
+      if (best) {
+        for (const suffix of ["", "-wal", "-shm"]) {
+          const dst = target + suffix
+          if (existsSync(dst)) {
+            try {
+              renameSync(dst, dst + ".pre-seed")
+            } catch {}
+          }
+          const src = best.file + suffix
+          if (existsSync(src)) {
+            try {
+              copyFileSync(src, dst)
+            } catch {}
+          }
+        }
+        result = { count: best.count, from: path.basename(best.file) }
+      }
+    }
+  } catch {
+    // 兜底导入任何异常都不阻断启动
+  }
+  try {
+    writeFileSync(marker, new Date().toISOString())
+  } catch {}
+  return result
+}
+
 async function start(command: StartCommand) {
   try {
     prepareSidecarEnv(command.password, command.userDataPath)
@@ -95,6 +187,10 @@ async function start(command: StartCommand) {
     useEnvProxy()
     const { Database, JsonMigration, Log, Server } = await import("virtual:opencode-server")
     await Log.init({ level: "WARN" })
+
+    // 兜底导入: 在打开任何 db 之前, 若当前渠道库为空且存在旧渠道库, 接管其历史会话(见函数注释)。
+    // 必须先于下面 Database.Client() 调用。
+    const seedResult = seedSessionsFromPreviousChannel(() => Database.getPath())
 
     if (command.needsMigration) {
       // 先推一个 0% 进度：让加载窗口立刻从静止的 "Just a moment..." 切到 "Migrating your database"，
@@ -124,6 +220,10 @@ async function start(command: StartCommand) {
       cors: ["oc://renderer"],
     })
     parentPort.postMessage({ type: "ready" })
+    // ready 之后再上报兜底导入结果, 由主进程提示用户"已恢复 N 个历史会话"。
+    if (seedResult) {
+      parentPort.postMessage({ type: "sessions-imported", count: seedResult.count, from: seedResult.from })
+    }
   } catch (error) {
     parentPort.postMessage({ type: "error", error: serializeError(error) })
     setImmediate(() => process.exit(1))
