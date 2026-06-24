@@ -9,6 +9,18 @@
 
 > 不要直接在 `release` 上开发；它只接受来自开发分支的合并。
 
+## 远端：两个仓库都要推（github + gitlab）
+
+本项目有**两个远端**，每次 push 分支 / tag **都要同步到两边**（否则 gitlab 落后）：
+
+- **`origin`** → `git@github.com:thkhxm/opencode.git`（GitHub，跑 `.github/workflows/punkcode-desktop.yml`，GitHub 托管 runner）
+- **`gitlab`** → `git@git.myverse.fans:ai/platfrom/opencode.git`（自托管 GitLab，跑 `.gitlab-ci.yml`，**自托管 mac/win runner**）
+
+约定：
+- **分支**（feat / release）push 到 `origin` 和 `gitlab` 两边——分支 push 不触发 CI，直接推即可。
+- **tag**（`desktop-v*`）两边都触发打包流水线。一般让 GitHub CI 出正式产物即可；推到 gitlab 仅作镜像/备份时加 `-o ci.skip` 避免占用自托管机器：`git push gitlab desktop-v<version> -o ci.skip`。需要 gitlab 自托管 runner 也打一份时，去掉 `-o ci.skip`。
+- 历史回填/批量同步旧 tag 一律加 `-o ci.skip`，别让自托管机器重打已发布的旧版。
+
 ## 版本号规则（每次发布 +1，不是每次改动 +1）
 
 - **开发期间的提交不要改 `packages/desktop/package.json` 的 `version`。** 多个改动可以累积在同一个待发布版本里，版本号保持不变。
@@ -19,16 +31,19 @@
 
 1. 在 `feat/punkcode-integration` 上确认所有要发布的改动已提交（此时 `version` 仍是上次发布的值）。
 2. **bump 版本**：把 `packages/desktop/package.json` 的 `version` +1（一个补丁号），单独提交。
-3. **合并进正式分支**：
+3. **合并进正式分支**（推到两个远端）：
    ```bash
    git checkout release
    git merge --no-ff feat/punkcode-integration -m "release: <version>"
    git push origin release
+   git push gitlab release          # 别忘了 gitlab
    ```
-4. **打 tag 触发 CI 打包**（在 release 分支的发布提交上）：
+   开发分支同理：`git push origin feat/punkcode-integration && git push gitlab feat/punkcode-integration`。
+4. **打 tag 触发 CI 打包**（在 release 分支的发布提交上，推到两个远端）：
    ```bash
    git tag -a desktop-v<version> -m "PunkcodeAI 桌面端 v<version>: <一句话>"
-   git push origin desktop-v<version>
+   git push origin desktop-v<version>               # 触发 GitHub CI 出正式产物
+   git push gitlab desktop-v<version> -o ci.skip    # 镜像到 gitlab；要自托管也打包就去掉 -o ci.skip
    ```
    CI（`.github/workflows/punkcode-desktop.yml`，触发条件 `desktop-v*`）会出 mac(arm64) + win(x64) **签名包**并挂到 GitHub Release。
 5. **发布到自建更新源** `/www/wwwroot/punkcodeai-updates/`：用 sub2api 仓库 `deploy/publish-desktop-update*.{sh,ps1}`，或手动：
