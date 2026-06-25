@@ -1,4 +1,4 @@
-param(
+﻿param(
   [Parameter(ValueFromRemainingArguments = $true)]
   [string[]] $Path
 )
@@ -9,8 +9,10 @@ if (-not $Path -or $Path.Count -eq 0) {
   throw "At least one path is required"
 }
 
-if ($env:GITHUB_ACTIONS -ne "true") {
-  Write-Host "Skipping Windows signing because this is not running on GitHub Actions"
+$isSupportedCi = $env:GITHUB_ACTIONS -eq "true" -or $env:GITLAB_CI -eq "true"
+
+if (-not $isSupportedCi) {
+  Write-Host "Skipping Windows signing because this is not running on GitHub Actions or GitLab CI"
   exit 0
 }
 

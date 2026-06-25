@@ -373,6 +373,16 @@ export function createPromptSubmit(input: PromptSubmitInput) {
           return undefined
         })
       if (created) {
+        const createdDirectory = created.directory || sessionDirectory
+        if (createdDirectory !== sessionDirectory) {
+          sessionDirectory = createdDirectory
+          client = sdk.createClient({
+            directory: sessionDirectory,
+            throwOnError: true,
+          })
+          serverSync.child(sessionDirectory)
+          layout.projects.open(sessionDirectory)
+        }
         seed(sessionDirectory, created)
         session = created
         if (shouldAutoAccept) permission.enableAutoAccept(session.id, sessionDirectory)

@@ -97,7 +97,34 @@ location /updates/ {
 
 如果短期没有自建服务器，可以临时把同一份产物上传到 GitHub Releases，然后用 `https://github.com/thkhxm/opencode/releases/latest/download` 作为 `PUNKCODE_UPDATE_FEED_URL`。这是 fallback，不是长期方案——一旦自建服务器就绪应立即切回。
 
-## 5. 发布一次新版本的完整步骤
+## 5. GitLab CI 自动发布
+
+正式包以 tag `desktop-v*` 触发 GitLab CI：
+
+1. `build:mac` 在 macOS runner 产出 `dmg/zip/latest-mac.yml`
+2. `build:win` 在 Windows runner 产出 `exe/blockmap/latest.yml`
+3. `deploy:updates` 汇总两个 job 的 artifacts，校验 `latest*.yml` 中的 `size/sha512`，通过 SSH 发布到 `/updates`
+
+GitLab CI/CD Variables 需要配置：
+
+| 变量 | 说明 |
+| --- | --- |
+| `PUNKCODE_UPDATE_HOST` | 更新服务器 host |
+| `PUNKCODE_UPDATE_USER` | SSH 用户 |
+| `PUNKCODE_UPDATE_REMOTE_DIR` | 服务器上的 updates 根目录；prod 直接写入这里，`beta/dev` 会自动追加子目录 |
+| `PUNKCODE_UPDATE_SSH_PRIVATE_KEY` | 部署 SSH 私钥 |
+| `PUNKCODE_UPDATE_SSH_HOST_KEY` | 可选，`known_hosts` 行；不填时首次连接使用 OpenSSH `accept-new` |
+| `PUNKCODE_UPDATE_PUBLIC_URL` | 可选，默认 `https://punkcodeai.myverse.site/updates` |
+
+tag 发布命令：
+
+```bash
+git tag desktop-v1.15.39
+git push origin desktop-v1.15.39
+git push gitlab desktop-v1.15.39
+```
+
+## 6. 手动发布一次新版本的完整步骤
 
 ```bash
 # 1. 在 packages/desktop/package.json 把 version 加一档（如 1.15.11 -> 1.16.0）
@@ -112,7 +139,7 @@ rsync -avz dist/ user@punkcodeai.myverse.site:/var/www/punkcodeai/updates/
 # 4. 验证：从一台老版本 PunkcodeAI 上点 "检查更新"，确认能拉到、能下载、能装上
 ```
 
-## 6. 灰度发布
+## 7. 灰度发布
 
 `autoUpdater.channel` 当前固定 `latest`。如要做灰度：
 
@@ -125,7 +152,7 @@ autoUpdater.channel = userIdHash % 100 < CANARY_PCT ? "canary" : "latest"
 
 3. canary 用户先升级，问题在小范围内暴露后再 promote 到 latest。
 
-## 7. 紧急下架
+## 8. 紧急下架
 
 如发现刚发的版本有严重问题：
 

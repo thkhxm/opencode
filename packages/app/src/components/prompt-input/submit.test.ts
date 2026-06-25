@@ -16,10 +16,12 @@ const optimistic: Array<{
   }
 }> = []
 const optimisticSeeded: boolean[] = []
-const storedSessions: Record<string, Array<{ id: string; title?: string }>> = {}
+const storedSessions: Record<string, Array<{ id: string; title?: string; directory?: string }>> = {}
 const promoted: Array<{ directory: string; sessionID: string }> = []
 const sentShell: string[] = []
 const syncedDirectories: string[] = []
+const openedProjects: string[] = []
+const navigated: string[] = []
 
 let params: { id?: string } = {}
 let selected = "/repo/worktree-a"
@@ -37,6 +39,7 @@ const clientFor = (directory: string) => {
           data: {
             id: `session-${createdSessions.length}`,
             title: `New session ${createdSessions.length}`,
+            ...(directory === "/" ? { directory: "C:/" } : {}),
           },
         }
       },
@@ -59,7 +62,7 @@ beforeAll(async () => {
   const rootClient = clientFor("/repo/main")
 
   mock.module("@solidjs/router", () => ({
-    useNavigate: () => () => undefined,
+    useNavigate: () => (path: string) => navigated.push(path),
     useParams: () => params,
   }))
 
@@ -120,6 +123,9 @@ beforeAll(async () => {
     useLayout: () => ({
       handoff: {
         setTabs: () => undefined,
+      },
+      projects: {
+        open: (directory: string) => openedProjects.push(directory),
       },
     }),
   }))
@@ -211,6 +217,8 @@ beforeEach(() => {
   params = {}
   sentShell.length = 0
   syncedDirectories.length = 0
+  openedProjects.length = 0
+  navigated.length = 0
   selected = "/repo/worktree-a"
   variant = undefined
   for (const key of Object.keys(storedSessions)) delete storedSessions[key]
@@ -340,6 +348,42 @@ describe("prompt submit worktree selection", () => {
     await submit.handleSubmit(event)
 
     expect(storedSessions["/repo/worktree-a"]).toEqual([{ id: "session-1", title: "New session 1" }])
+    expect(optimisticSeeded).toEqual([true])
+  })
+
+  test("uses the server canonical directory after creating a session", async () => {
+    selected = "/"
+
+    const submit = createPromptSubmit({
+      info: () => undefined,
+      imageAttachments: () => [],
+      commentCount: () => 0,
+      autoAccept: () => false,
+      mode: () => "normal",
+      working: () => false,
+      editor: () => undefined,
+      queueScroll: () => undefined,
+      promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
+      addToHistory: () => undefined,
+      resetHistoryNavigation: () => undefined,
+      setMode: () => undefined,
+      setPopover: () => undefined,
+      newSessionWorktree: () => selected,
+      onNewSessionWorktreeReset: () => undefined,
+      onSubmit: () => undefined,
+    })
+
+    const event = { preventDefault: () => undefined } as unknown as Event
+
+    await submit.handleSubmit(event)
+
+    expect(createdClients).toEqual(["/", "C:/"])
+    expect(createdSessions).toEqual(["/"])
+    expect(storedSessions["C:/"]).toEqual([{ id: "session-1", title: "New session 1", directory: "C:/" }])
+    expect(promoted).toEqual([{ directory: "C:/", sessionID: "session-1" }])
+    expect(openedProjects).toEqual(["C:/"])
+    expect(navigated).toEqual(["/C://session/session-1"])
+    expect(optimistic[0]?.directory).toBe("C:/")
     expect(optimisticSeeded).toEqual([true])
   })
 })

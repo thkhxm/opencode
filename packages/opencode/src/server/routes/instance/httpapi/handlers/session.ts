@@ -36,6 +36,7 @@ import {
 } from "../groups/session"
 import { PermissionNotFoundError } from "../errors"
 import * as SessionError from "./session-errors"
+import * as InstanceState from "@/effect/instance-state"
 
 const tryParseJson = (text: string) =>
   Effect.try({
@@ -60,8 +61,11 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const scope = yield* Scope.Scope
 
     const list = Effect.fn("SessionHttpApi.list")(function* (ctx: { query: typeof ListQuery.Type }) {
+      const instance = yield* InstanceState.context
+      const directory =
+        ctx.query.scope === "project" || ctx.query.directory === undefined ? undefined : instance.directory
       return yield* session.list({
-        directory: ctx.query.scope === "project" ? undefined : ctx.query.directory,
+        directory,
         scope: ctx.query.scope,
         path: ctx.query.path,
         roots: ctx.query.roots,

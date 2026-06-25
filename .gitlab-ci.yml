@@ -6,10 +6,19 @@
 # 前提：注册带 tag 的 shell executor runner ——
 #   - 一台 Mac 打 `macos` 标签（需 bun / git / xcode-select --install）；
 #   - 一台 Windows 打 `windows` 标签（需 bun / git）。
-# 产物作为 job artifacts，可在 Pipeline 页按 job 下载；下载后用 deploy/publish-desktop-update*.* 发到自建 /updates。
+# 产物作为 job artifacts；tag 构建通过 deploy:updates 自动发布到自建 /updates。
+#
+# deploy:updates 需要在 GitLab CI/CD Variables 配置：
+#   - PUNKCODE_UPDATE_HOST：更新服务器 host
+#   - PUNKCODE_UPDATE_USER：SSH 用户
+#   - PUNKCODE_UPDATE_REMOTE_DIR：服务器上的 updates 根目录
+#   - PUNKCODE_UPDATE_SSH_PRIVATE_KEY：部署 SSH 私钥
+#   - PUNKCODE_UPDATE_SSH_HOST_KEY：可选，known_hosts 行；不填时用 accept-new
+#   - PUNKCODE_UPDATE_PUBLIC_URL：可选，默认 https://punkcodeai.myverse.site/updates
 
 stages:
   - build
+  - deploy
 
 variables:
   PUNKCODE_CHANNEL: "prod"
@@ -28,6 +37,7 @@ build:mac:
   script:
     - bun install
     - cd packages/desktop
+    - mkdir -p native
     - bun run build
     - bun run package:mac
   artifacts:
@@ -47,6 +57,7 @@ build:win:
   script:
     - bun install
     - cd packages/desktop
+    - if (!(Test-Path native)) { New-Item -ItemType Directory native | Out-Null }
     - bun run build
     - bun run package:win
   artifacts:
@@ -57,3 +68,16 @@ build:win:
       - packages/desktop/dist/*.blockmap
       - packages/desktop/dist/latest.yml
     expire_in: 2 weeks
+
+deploy:updates:
+  stage: deploy
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^desktop-v/'
+  tags: [macos]
+  needs:
+    - job: build:mac
+      artifacts: true
+    - job: build:win
+      artifacts: true
+  script:
+    - python3 packages/desktop/scripts/publish-updates-gitlab.py

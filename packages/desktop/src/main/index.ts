@@ -99,6 +99,30 @@ function emitDeepLinks(urls: string[]) {
   if (mainWindow) sendDeepLinks(mainWindow, urls)
 }
 
+/**
+ * 单实例激活：把已存在的主窗口还原到前台（去最小化 + 显示 + 置顶 + 聚焦）。
+ *
+ * 偶发「卡在加载界面、重启没反应」的根因：第二个实例被 requestSingleInstanceLock 拦下后，
+ * 由主实例的 `second-instance` 回调负责激活窗口。但**加载阶段 mainWindow 仍为 null**
+ * （createMainWindow 在 serverReady 之后才执行，最坏隔 ~20s），旧实现 `if (mainWindow)` 直接落空——
+ * 用户重复双击图标全被静默吞掉、界面毫无变化，体感就是「重启无效」。
+ *
+ * 现在：窗口已就绪 → 还原+显示+置顶+聚焦；窗口尚未创建 → 记 pendingActivate 标记，
+ * 等窗口创建后立即补一次激活（见 createMainWindow 之后的消费点）。
+ */
+let pendingActivate = false
+function activateMainWindow() {
+  const win = mainWindow
+  if (!win || win.isDestroyed()) {
+    pendingActivate = true
+    return
+  }
+  if (win.isMinimized()) win.restore()
+  win.show()
+  win.moveTop()
+  win.focus()
+}
+
 function setInitStep(step: InitStep) {
   initStep = step
   logger.log("init step", { step })
@@ -294,10 +318,8 @@ const main = Effect.gen(function* () {
       logger.log("deep link received via second-instance", { urls })
       emitDeepLinks(urls)
     }
-    if (mainWindow) {
-      mainWindow.show()
-      mainWindow.focus()
-    }
+    // 把已有窗口拉到前台；加载阶段窗口尚未创建则记标记、待创建后激活。
+    activateMainWindow()
   })
 
   app.on("open-url", (event: Event, url: string) => {
@@ -618,6 +640,20 @@ const main = Effect.gen(function* () {
 
   mainWindow = createMainWindow()
   if (mainWindow) {
+    const created = mainWindow
+    // 窗口关闭后把引用置空：否则 second-instance 拿到的是已销毁的窗口（show() 会抛
+    // "Object has been destroyed"），且无法据此判断「需重建」。置空后 activateMainWindow
+    // 会走 pendingActivate 分支兜底。
+    created.on("closed", () => {
+      if (mainWindow === created) mainWindow = null
+    })
+    // 加载阶段被第二实例请求过激活 → 窗口一就绪立即激活到前台（避免在 paint 前 show 造成白屏闪烁，
+    // 挂到 ready-to-show 上；createMainWindow 自身的 ready-to-show 先 show，本回调再置顶聚焦）。
+    if (pendingActivate) {
+      pendingActivate = false
+      if (created.isVisible()) activateMainWindow()
+      else created.once("ready-to-show", () => activateMainWindow())
+    }
     createMenu({
       trigger: (id) => {
         const win = BrowserWindow.getFocusedWindow() ?? mainWindow

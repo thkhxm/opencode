@@ -8,10 +8,11 @@ import type { Configuration } from "electron-builder"
 const execFileAsync = promisify(execFile)
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
 const signScript = path.join(rootDir, "script", "sign-windows.ps1")
+const isSigningCI = () => process.env.GITHUB_ACTIONS === "true" || process.env.GITLAB_CI === "true"
 
 async function signWindows(configuration: { path: string }) {
   if (process.platform !== "win32") return
-  if (process.env.GITHUB_ACTIONS !== "true") return
+  if (!isSigningCI()) return
 
   await execFileAsync(
     "pwsh",
