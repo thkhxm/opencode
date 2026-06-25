@@ -23,6 +23,9 @@ stages:
 variables:
   PUNKCODE_CHANNEL: "prod"
   GIT_DEPTH: "1"
+  ELECTRON_MIRROR: "https://npmmirror.com/mirrors/electron/"
+  npm_config_electron_mirror: "https://npmmirror.com/mirrors/electron/"
+  ELECTRON_BUILDER_BINARIES_MIRROR: "https://npmmirror.com/mirrors/electron-builder-binaries/"
 
 # 仅在打 desktop-v* tag 或 Web 手动触发时跑（避免每次 push 都构建）
 .desktop_rules: &desktop_rules
@@ -34,6 +37,12 @@ build:mac:
   stage: build
   <<: *desktop_rules
   tags: [macos] # 落到你的 Mac self-hosted runner（shell executor）
+  retry:
+    max: 2
+    when:
+      - runner_system_failure
+      - stuck_or_timeout_failure
+      - script_failure
   script:
     - bun install
     - cd packages/desktop
@@ -54,6 +63,12 @@ build:win:
   stage: build
   <<: *desktop_rules
   tags: [windows] # 落到你的 Windows self-hosted runner（shell executor，默认 PowerShell）
+  retry:
+    max: 2
+    when:
+      - runner_system_failure
+      - stuck_or_timeout_failure
+      - script_failure
   script:
     - bun install
     - cd packages/desktop
