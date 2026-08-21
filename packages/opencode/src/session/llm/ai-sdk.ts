@@ -10,11 +10,16 @@ export function adapterState() {
   return {
     step: 0,
     text: 0,
+    sawTextDelta: false,
     reasoning: 0,
     currentTextID: undefined as string | undefined,
     currentReasoningID: undefined as string | undefined,
     toolNames: {} as Record<string, string>,
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object"
 }
 
 function finishReason(value: string | undefined): FinishReason {
@@ -56,6 +61,35 @@ function currentTextID(state: ReturnType<typeof adapterState>, id: string | unde
 function currentReasoningID(state: ReturnType<typeof adapterState>, id: string | undefined) {
   state.currentReasoningID = id ?? state.currentReasoningID ?? `reasoning-${state.reasoning++}`
   return state.currentReasoningID
+}
+
+function completedOutputText(rawValue: unknown) {
+  if (!isRecord(rawValue) || rawValue.type !== "response.completed") return []
+  if (!isRecord(rawValue.response) || !Array.isArray(rawValue.response.output)) return []
+  return rawValue.response.output.flatMap((item) => {
+    if (!isRecord(item) || item.type !== "message" || !Array.isArray(item.content)) return []
+    const text = item.content
+      .map((part) => (isRecord(part) && part.type === "output_text" && typeof part.text === "string" ? part.text : ""))
+      .join("")
+    if (!text) return []
+    return [{ id: typeof item.id === "string" ? item.id : undefined, text }]
+  })
+}
+
+function completedTextFallback(state: ReturnType<typeof adapterState>, rawValue: unknown) {
+  if (state.sawTextDelta) return []
+  const items = completedOutputText(rawValue)
+  if (items.length === 0) return []
+  state.sawTextDelta = true
+  return items.flatMap((item) => {
+    const id = currentTextID(state, item.id)
+    state.currentTextID = undefined
+    return [
+      LLMEvent.textStart({ id }),
+      LLMEvent.textDelta({ id, text: item.text }),
+      LLMEvent.textEnd({ id }),
+    ]
+  })
 }
 
 export function toLLMEvents(
@@ -106,6 +140,7 @@ export function toLLMEvents(
       })
 
     case "text-delta":
+      state.sawTextDelta = true
       return Effect.succeed([
         LLMEvent.textDelta({
           id: currentTextID(state, event.id),
@@ -244,10 +279,12 @@ export function toLLMEvents(
     case "abort":
     case "source":
     case "file":
-    case "raw":
     case "tool-output-denied":
     case "tool-approval-request":
       return Effect.succeed([])
+
+    case "raw":
+      return Effect.succeed(completedTextFallback(state, event.rawValue))
 
     default: {
       const _exhaustive: never = event

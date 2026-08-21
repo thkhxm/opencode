@@ -99,13 +99,15 @@ function sqlite(db: Database.TxOrDb, sessionID: SessionID): SessionMessageUpdate
     },
     appendMessage(message) {
       const { id, type, ...data } = message
+      const time = DateTime.toEpochMillis(message.time.created)
       db.insert(SessionMessageTable)
         .values([
           {
             id,
             session_id: sessionID,
             type,
-            time_created: DateTime.toEpochMillis(message.time.created),
+            time_created: time,
+            time_updated: time,
             data: encodeMessageData(data),
           },
         ])

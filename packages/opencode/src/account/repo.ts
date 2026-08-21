@@ -129,6 +129,7 @@ export const layer: Layer.Layer<Service> = Layer.effect(
     const persistAccount = Effect.fn("AccountRepo.persistAccount")((input) =>
       tx((db) => {
         const url = normalizeServerUrl(input.url)
+        const now = Date.now()
 
         db.insert(AccountTable)
           .values({
@@ -138,6 +139,8 @@ export const layer: Layer.Layer<Service> = Layer.effect(
             access_token: input.accessToken,
             refresh_token: input.refreshToken,
             token_expiry: input.expiry,
+            time_created: now,
+            time_updated: now,
           })
           .onConflictDoUpdate({
             target: AccountTable.id,
@@ -147,6 +150,7 @@ export const layer: Layer.Layer<Service> = Layer.effect(
               access_token: input.accessToken,
               refresh_token: input.refreshToken,
               token_expiry: input.expiry,
+              time_updated: now,
             },
           })
           .run()

@@ -43,6 +43,7 @@ export const layer = Layer.effect(
         Database.transaction((db) => {
           db.delete(TodoTable).where(eq(TodoTable.session_id, input.sessionID)).run()
           if (input.todos.length === 0) return
+          const now = Date.now()
           db.insert(TodoTable)
             .values(
               input.todos.map((todo, position) => ({
@@ -51,6 +52,8 @@ export const layer = Layer.effect(
                 status: todo.status,
                 priority: todo.priority,
                 position,
+                time_created: now,
+                time_updated: now,
               })),
             )
             .run()

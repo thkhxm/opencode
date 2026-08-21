@@ -303,6 +303,7 @@ const live: Layer.Layer<
           activeTools: Object.keys(prepared.tools).filter((x) => x !== "invalid"),
           tools: prepared.tools,
           toolChoice: input.toolChoice,
+          includeRawChunks: true,
           maxOutputTokens: prepared.params.maxOutputTokens,
           abortSignal: input.abort,
           headers: prepared.headers,

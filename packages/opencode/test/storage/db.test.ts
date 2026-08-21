@@ -1,10 +1,13 @@
-import { describe, expect } from "bun:test"
+import { Database as BunDatabase } from "bun:sqlite"
+import { describe, expect, test } from "bun:test"
+import { drizzle } from "drizzle-orm/bun-sqlite"
 import path from "path"
 import { Effect } from "effect"
 import { Global } from "@opencode-ai/core/global"
 import { InstallationChannel } from "@opencode-ai/core/installation/version"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Database } from "@/storage/db"
+import { PermissionTable } from "@/session/session.sql"
 import { it } from "../lib/effect"
 
 describe("Database.getChannelPath", () => {
@@ -35,4 +38,32 @@ describe("Database.getChannelPath", () => {
       expect(Database.getChannelPath(flags)).toBe(Database.getChannelPath({ disableChannelDb: flags.disableChannelDb }))
     }).pipe(Effect.provide(RuntimeFlags.layer({ skipMigrations: true }))),
   )
+})
+
+describe("Database.repairLegacyPermissionTable", () => {
+  test("adds default permission data for legacy rows", () => {
+    const sqlite = new BunDatabase(":memory:")
+    try {
+      const db = drizzle({ client: sqlite })
+
+      db.run(/* sql */ `
+        CREATE TABLE permission (
+          project_id text PRIMARY KEY,
+          time_created integer NOT NULL,
+          time_updated integer NOT NULL
+        )
+      `)
+      db.run(/* sql */ `
+        INSERT INTO permission (project_id, time_created, time_updated)
+        VALUES ('proj_legacy', 1, 2)
+      `)
+
+      Database.repairLegacyPermissionTable(db)
+      Database.repairLegacyPermissionTable(db)
+
+      expect(db.select().from(PermissionTable).get()?.data).toEqual([])
+    } finally {
+      sqlite.close()
+    }
+  })
 })

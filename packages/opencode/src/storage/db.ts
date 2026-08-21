@@ -1,5 +1,6 @@
 import { type SQLiteBunDatabase } from "drizzle-orm/bun-sqlite"
 import { migrate } from "drizzle-orm/bun-sqlite/migrator"
+import { sql } from "drizzle-orm"
 import { type SQLiteTransaction } from "drizzle-orm/sqlite-core"
 export * from "drizzle-orm"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -54,6 +55,15 @@ const migrateFromJournal = migrate as unknown as (db: SQLiteBunDatabase, entries
 
 function applyMigrations(db: SQLiteBunDatabase, entries: Journal) {
   migrateFromJournal(db, entries)
+}
+
+export function repairLegacyPermissionTable(db: SQLiteBunDatabase) {
+  const columns = db.all<{ name: string }>(sql.raw("PRAGMA table_info('permission')"))
+  if (columns.length === 0) return
+  if (columns.some((column) => column.name === "data")) return
+
+  db.run(/* sql */ `ALTER TABLE permission ADD COLUMN data text NOT NULL DEFAULT '[]'`)
+  log.warn("repaired legacy permission table missing data column")
 }
 
 function time(tag: string) {
@@ -125,6 +135,7 @@ export const Client = Object.assign(
       }
       applyMigrations(db, entries)
     }
+    repairLegacyPermissionTable(db)
 
     client = db
     loaded = true

@@ -109,6 +109,11 @@ function errorTool(parts: MessageV2.Part[]) {
   return part?.state.status === "error" ? (part as ErrorToolPart) : undefined
 }
 
+function assistantErrorMessage(error: MessageV2.Assistant["error"]) {
+  if (!error) return ""
+  return "message" in error.data && typeof error.data.message === "string" ? error.data.message : ""
+}
+
 const mcp = Layer.succeed(
   MCP.Service,
   MCP.Service.of({
@@ -509,6 +514,41 @@ it.instance("loop calls LLM and returns assistant message", () =>
     expect(parts.some((p) => p.type === "text" && p.text === "world")).toBe(true)
     expect(yield* llm.hits).toHaveLength(1)
   }),
+)
+
+noLLMServer.instance(
+  "prompt persists assistant error when reply setup fails",
+  () =>
+    Effect.gen(function* () {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const status = yield* SessionStatus.Service
+      const session = yield* sessions.create({ title: "Prompt failure" })
+
+      const result = yield* prompt.prompt({
+        sessionID: session.id,
+        agent: "build",
+        model: { providerID: ProviderID.make("test"), modelID: ModelID.make("missing-model") },
+        parts: [{ type: "text", text: "hello" }],
+      })
+
+      expect(result.info.role).toBe("assistant")
+      if (result.info.role !== "assistant") return
+      expect(assistantErrorMessage(result.info.error)).toContain("Model not found: test/missing-model")
+      expect(typeof result.info.time.completed).toBe("number")
+      expect((yield* status.get(session.id)).type).toBe("idle")
+
+      const messages = yield* sessions.messages({ sessionID: session.id })
+      expect(
+        messages.some(
+          (message) =>
+            message.info.role === "assistant" &&
+            message.info.id === result.info.id &&
+            assistantErrorMessage(message.info.error).includes("Model not found: test/missing-model"),
+        ),
+      ).toBe(true)
+    }),
+  { config: cfg },
 )
 
 noLLMServer.instance(
