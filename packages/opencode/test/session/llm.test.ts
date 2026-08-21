@@ -329,6 +329,64 @@ describe("session.llm.ai-sdk adapter", () => {
     ).toEqual([])
   })
 
+  test("recovers Responses completed output text when the provider emitted no text deltas", async () => {
+    const events = await adapt([
+      uncheckedAdapterEvent({
+        type: "raw",
+        rawValue: {
+          type: "response.completed",
+          response: {
+            output: [
+              {
+                id: "msg_123",
+                type: "message",
+                content: [
+                  { type: "output_text", text: "Recovered " },
+                  { type: "output_text", text: "reply" },
+                ],
+              },
+            ],
+          },
+        },
+      }),
+    ])
+
+    expect(events).toMatchObject([
+      { type: "text-start", id: "msg_123" },
+      { type: "text-delta", id: "msg_123", text: "Recovered reply" },
+      { type: "text-end", id: "msg_123" },
+    ])
+  })
+
+  test("does not duplicate Responses completed output after normal text deltas", async () => {
+    const events = await adapt([
+      { type: "text-start", id: "msg_123" },
+      { type: "text-delta", id: "msg_123", text: "Normal reply" },
+      uncheckedAdapterEvent({
+        type: "raw",
+        rawValue: {
+          type: "response.completed",
+          response: {
+            output: [
+              {
+                id: "msg_123",
+                type: "message",
+                content: [{ type: "output_text", text: "Normal reply" }],
+              },
+            ],
+          },
+        },
+      }),
+      { type: "text-end", id: "msg_123" },
+    ])
+
+    expect(events).toMatchObject([
+      { type: "text-start", id: "msg_123" },
+      { type: "text-delta", id: "msg_123", text: "Normal reply" },
+      { type: "text-end", id: "msg_123" },
+    ])
+  })
+
   test("preserves tool-error cause", async () => {
     const error = new Permission.RejectedError()
     const events = await Effect.runPromise(

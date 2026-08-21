@@ -2,6 +2,7 @@
 import { $ } from "bun"
 
 import { resolveChannel } from "./utils"
+import opencodePkg from "../../opencode/package.json"
 
 const channel = resolveChannel()
 // 关键(根治"更新后历史会话消失"): 把渠道显式传给核心 dist 构建 build-node.ts。
@@ -9,6 +10,7 @@ const channel = resolveChannel()
 // getChannelPath 据此烘出 opencode-<分支>.db; 而别的构建可能烘成 opencode.db, 两者对不上 →
 // 更新后读到另一个(空)库, 会话像"凭空消失"。固定按 resolveChannel()(默认 prod)烘焙, 库名永远稳定。
 process.env.OPENCODE_CHANNEL = channel
+process.env.OPENCODE_VERSION = opencodePkg.version
 
 await $`bun ./scripts/copy-icons.ts ${channel}`
 await $`bun ./scripts/copy-metainfo.ts ${channel}`

@@ -132,9 +132,10 @@ export default [
           id,
           session_id: sessionID,
           time_created,
+          time_updated: time_created,
           data: rest,
         })
-        .onConflictDoUpdate({ target: MessageTable.id, set: { data: rest } })
+        .onConflictDoUpdate({ target: MessageTable.id, set: { data: rest, time_updated: Date.now() } })
         .run()
     } catch (err) {
       if (!foreign(err)) throw err
@@ -181,9 +182,10 @@ export default [
           message_id: messageID,
           session_id: sessionID,
           time_created: data.time,
+          time_updated: data.time,
           data: rest,
         })
-        .onConflictDoUpdate({ target: PartTable.id, set: { data: rest } })
+        .onConflictDoUpdate({ target: PartTable.id, set: { data: rest, time_updated: data.time } })
         .run()
       const previous = row && usage(row.data)
       const next = usage(data.part)

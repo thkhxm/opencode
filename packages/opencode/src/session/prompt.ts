@@ -133,7 +133,7 @@ export const layer = Layer.effect(
       return {
         cancel: (sessionID: SessionID) => cancel(sessionID),
         resolvePromptParts: (template: string) => resolvePromptParts(template),
-        prompt: (input: PromptInput) => prompt(input).pipe(Effect.catch(Effect.die)),
+        prompt: (input: PromptInput) => promptImpl(input, { persistFailure: false }).pipe(Effect.catch(Effect.die)),
       } satisfies TaskPromptOps
     })
 
@@ -1212,9 +1212,10 @@ export const layer = Layer.effect(
       return { info, parts }
     }, Effect.scoped)
 
-    const prompt: (input: PromptInput) => Effect.Effect<MessageV2.WithParts, Image.Error> = Effect.fn(
-      "SessionPrompt.prompt",
-    )(function* (input: PromptInput) {
+    const promptImpl = Effect.fn("SessionPrompt.promptImpl")(function* (
+      input: PromptInput,
+      options: { persistFailure: boolean },
+    ) {
       const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
       yield* revert.cleanup(session)
       const message = yield* createUserMessage(input)
@@ -1230,7 +1231,73 @@ export const layer = Layer.effect(
       }
 
       if (input.noReply === true) return message
-      return yield* loop({ sessionID: input.sessionID })
+      const result = loop({ sessionID: input.sessionID })
+      if (!options.persistFailure) return yield* result
+      return yield* result.pipe(
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.interrupt
+            : persistPromptFailure({ sessionID: input.sessionID, parent: message.info, cause }),
+        ),
+      )
+    })
+
+    const prompt: (input: PromptInput) => Effect.Effect<MessageV2.WithParts, Image.Error> = Effect.fn(
+      "SessionPrompt.prompt",
+    )(function* (input: PromptInput) {
+      return yield* promptImpl(input, { persistFailure: true })
+    })
+
+    const persistPromptFailure = Effect.fn("SessionPrompt.persistPromptFailure")(function* (input: {
+      sessionID: SessionID
+      parent: MessageV2.User
+      cause: Cause.Cause<unknown>
+    }) {
+      const ctx = yield* InstanceState.context
+      const now = Date.now()
+      const squashed = Cause.squash(input.cause)
+      const error = Provider.ModelNotFoundError.isInstance(squashed)
+        ? new NamedError.Unknown({
+            message: `Model not found: ${squashed.providerID}/${squashed.modelID}.${
+              squashed.suggestions?.length ? ` Did you mean: ${squashed.suggestions.join(", ")}?` : ""
+            }`,
+          }).toObject()
+        : MessageV2.fromError(squashed instanceof Error ? squashed : new Error(Cause.pretty(input.cause)), {
+            providerID: input.parent.model.providerID,
+          })
+      const errorMessage =
+        "message" in error.data && typeof error.data.message === "string"
+          ? error.data.message
+          : Cause.pretty(input.cause)
+      const assistant = yield* sessions.updateMessage({
+        id: MessageID.ascending(),
+        parentID: input.parent.id,
+        role: "assistant",
+        mode: input.parent.agent,
+        agent: input.parent.agent,
+        variant: input.parent.model.variant,
+        path: { cwd: ctx.directory, root: ctx.worktree },
+        cost: 0,
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        modelID: input.parent.model.modelID,
+        providerID: input.parent.model.providerID,
+        time: { created: now, completed: now },
+        sessionID: input.sessionID,
+        error,
+      } satisfies MessageV2.Assistant)
+      if (flags.experimentalEventSystem) {
+        yield* events.publish(SessionEvent.Step.Failed, {
+          sessionID: input.sessionID,
+          error: {
+            type: "unknown",
+            message: errorMessage,
+          },
+          timestamp: DateTime.makeUnsafe(now),
+        })
+      }
+      yield* bus.publish(Session.Event.Error, { sessionID: input.sessionID, error })
+      yield* status.set(input.sessionID, { type: "idle" })
+      return { info: assistant, parts: [] }
     })
 
     const lastAssistant = Effect.fnUntraced(function* (sessionID: SessionID) {

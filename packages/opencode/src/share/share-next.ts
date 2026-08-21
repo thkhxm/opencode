@@ -321,13 +321,21 @@ export const layer = Layer.effect(
         Effect.flatMap((r) => httpOk.execute(r)),
         Effect.flatMap(HttpClientResponse.schemaBodyJson(ShareSchema)),
       )
+      const now = Date.now()
       yield* db((db) =>
         db
           .insert(SessionShareTable)
-          .values({ session_id: sessionID, id: result.id, secret: result.secret, url: result.url })
+          .values({
+            session_id: sessionID,
+            id: result.id,
+            secret: result.secret,
+            url: result.url,
+            time_created: now,
+            time_updated: now,
+          })
           .onConflictDoUpdate({
             target: SessionShareTable.session_id,
-            set: { id: result.id, secret: result.secret, url: result.url },
+            set: { id: result.id, secret: result.secret, url: result.url, time_updated: now },
           })
           .run(),
       )

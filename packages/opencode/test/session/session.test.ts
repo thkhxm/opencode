@@ -1,10 +1,13 @@
 import { describe, expect } from "bun:test"
 import { Deferred, Effect, Exit, Layer } from "effect"
+import * as DateTime from "effect/DateTime"
 import { Session as SessionNs } from "@/session/session"
 import { GlobalBus, type GlobalEvent } from "../../src/bus/global"
 import * as Log from "@opencode-ai/core/util/log"
+import { SessionEvent } from "@opencode-ai/core/session-event"
 import { MessageV2 } from "../../src/session/message-v2"
 import { MessageID, PartID, type SessionID } from "../../src/session/schema"
+import { MessageTable, PartTable, SessionMessageTable } from "../../src/session/session.sql"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { provideInstance, tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
@@ -13,11 +16,14 @@ import { Storage } from "@/storage/storage"
 import { SyncEvent } from "@/sync"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { BackgroundJob } from "@/background/job"
+import { EventV2Bridge } from "@/event-v2-bridge"
+import * as Database from "@/storage/db"
 
 void Log.init({ print: false })
 
 const it = testEffect(
   Layer.mergeAll(
+    SyncEvent.defaultLayer,
     SessionNs.layer.pipe(
       Layer.provide(Bus.layer),
       Layer.provide(Storage.defaultLayer),
@@ -104,6 +110,66 @@ describe("session.created event", () => {
 })
 
 describe("step-finish token propagation via Bus event", () => {
+  it.instance("projectors persist explicit update timestamps", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionNs.Service
+      const sync = yield* SyncEvent.Service
+      const info = yield* session.create({})
+      const messageID = MessageID.ascending()
+      const messageTime = 123_456
+
+      yield* session.updateMessage({
+        id: messageID,
+        sessionID: info.id,
+        role: "user",
+        time: { created: messageTime },
+        agent: "user",
+        model: { providerID: "test", modelID: "test" },
+        tools: {},
+        mode: "",
+      } as unknown as MessageV2.Info)
+
+      const partID = PartID.ascending()
+      yield* sync.run(MessageV2.Event.PartUpdated, {
+        sessionID: info.id,
+        part: {
+          id: partID,
+          messageID,
+          sessionID: info.id,
+          type: "text",
+          text: "hello",
+          synthetic: false,
+        },
+        time: 234_567,
+      })
+
+      yield* sync.run(EventV2Bridge.toSyncDefinition(SessionEvent.Prompted), {
+        sessionID: info.id,
+        timestamp: DateTime.makeUnsafe(345_678),
+        prompt: { text: "hello v2", files: [], agents: [], references: [] },
+      })
+
+      const message = Database.use((db) =>
+        db.select().from(MessageTable).where(Database.eq(MessageTable.id, messageID)).get(),
+      )
+      const part = Database.use((db) =>
+        db.select().from(PartTable).where(Database.eq(PartTable.id, partID)).get(),
+      )
+      const sessionMessage = Database.use((db) =>
+        db.select().from(SessionMessageTable).where(Database.eq(SessionMessageTable.session_id, info.id)).get(),
+      )
+
+      expect(message?.time_created).toBe(messageTime)
+      expect(message?.time_updated).toBe(messageTime)
+      expect(part?.time_created).toBe(234_567)
+      expect(part?.time_updated).toBe(234_567)
+      expect(sessionMessage?.time_created).toBe(345_678)
+      expect(sessionMessage?.time_updated).toBe(345_678)
+
+      yield* session.remove(info.id)
+    }),
+  )
+
   it.instance(
     "non-zero tokens propagate through PartUpdated event",
     () =>

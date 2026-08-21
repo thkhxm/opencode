@@ -741,6 +741,181 @@ describe("HttpApi SDK", () => {
     ),
   )
 
+  serverPathParity("promptAsync returns idle after background setup failure", (serverPath) =>
+    withStandardProject(serverPath, ({ sdk }) =>
+      Effect.gen(function* () {
+        const session = yield* capture(() => sdk.session.create({ title: "prompt async failure" }))
+        const sessionID = String(record(session.data).id)
+
+        const controller = new AbortController()
+        yield* Effect.addFinalizer(() => Effect.sync(() => controller.abort()))
+        const events = yield* call(() => sdk.event.subscribe(undefined, { signal: controller.signal }))
+        yield* Effect.addFinalizer(() =>
+          call(async () => void (await events.stream.return?.(undefined))).pipe(Effect.ignore),
+        )
+
+        const ready = yield* Deferred.make<void>()
+        const idle = yield* Deferred.make<unknown>()
+
+        yield* call(async () => {
+          for await (const event of events.stream) {
+            const payload = record(event).payload ?? event
+            const type = record(payload).type
+            if (type === "server.connected") {
+              Deferred.doneUnsafe(ready, Effect.void)
+              continue
+            }
+            const properties = record(record(payload).properties)
+            if (
+              type === "session.status" &&
+              properties.sessionID === sessionID &&
+              record(properties.status).type === "idle"
+            ) {
+              Deferred.doneUnsafe(idle, Effect.succeed(payload))
+              return
+            }
+          }
+        }).pipe(Effect.forkScoped)
+
+        yield* awaitWithTimeout(Deferred.await(ready), "timed out waiting for /event server.connected", "2 seconds")
+
+        const prompt = yield* capture(() =>
+          sdk.session.promptAsync({
+            sessionID,
+            agent: "nonexistent-agent-xyz",
+            noReply: true,
+            parts: [{ type: "text", text: "hello" }],
+          }),
+        )
+        const event = yield* awaitWithTimeout(
+          Deferred.await(idle),
+          "timed out waiting for promptAsync failure to publish idle",
+          "5 seconds",
+        )
+        const properties = record(record(event).properties)
+
+        expect(prompt.status).toBe(204)
+        expect(record(properties.status).type).toBe("idle")
+        expect(properties.sessionID).toBe(sessionID)
+
+        return {
+          promptStatus: prompt.status,
+          status: record(properties.status).type,
+          sessionMatched: properties.sessionID === sessionID,
+        }
+      }),
+    ),
+  )
+
+  serverPathParity("promptAsync returns idle after fake LLM completion", (serverPath) =>
+    withFakeLlm(serverPath, ({ sdk, llm }) =>
+      Effect.gen(function* () {
+        yield* llm.text("async world", { usage: { input: 11, output: 7 } })
+        const session = yield* capture(() =>
+          sdk.session.create({
+            title: "async llm prompt",
+            permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          }),
+        )
+        const sessionID = String(record(session.data).id)
+
+        const controller = new AbortController()
+        yield* Effect.addFinalizer(() => Effect.sync(() => controller.abort()))
+        const events = yield* call(() => sdk.event.subscribe(undefined, { signal: controller.signal }))
+        yield* Effect.addFinalizer(() =>
+          call(async () => void (await events.stream.return?.(undefined))).pipe(Effect.ignore),
+        )
+
+        const ready = yield* Deferred.make<void>()
+        const idle = yield* Deferred.make<unknown>()
+
+        yield* call(async () => {
+          for await (const event of events.stream) {
+            const payload = record(event).payload ?? event
+            const type = record(payload).type
+            if (type === "server.connected") {
+              Deferred.doneUnsafe(ready, Effect.void)
+              continue
+            }
+            const properties = record(record(payload).properties)
+            if (
+              type === "session.status" &&
+              properties.sessionID === sessionID &&
+              record(properties.status).type === "idle"
+            ) {
+              Deferred.doneUnsafe(idle, Effect.succeed(payload))
+              return
+            }
+          }
+        }).pipe(Effect.forkScoped)
+
+        yield* awaitWithTimeout(Deferred.await(ready), "timed out waiting for /event server.connected", "2 seconds")
+        const prompt = yield* capture(() =>
+          sdk.session.promptAsync({
+            sessionID,
+            agent: "build",
+            model: { providerID: "test", modelID: "test-model" },
+            parts: [{ type: "text", text: "hello async llm" }],
+          }),
+        )
+        yield* awaitWithTimeout(llm.wait(1), "timed out waiting for fake LLM call", "2 seconds")
+        const event = yield* awaitWithTimeout(
+          Deferred.await(idle),
+          "timed out waiting for promptAsync completion to publish idle",
+          "5 seconds",
+        )
+        const messages = yield* capture(() => sdk.session.messages({ sessionID }))
+        const properties = record(record(event).properties)
+
+        expect(prompt.status).toBe(204)
+        expect(record(properties.status).type).toBe("idle")
+        expect(properties.sessionID).toBe(sessionID)
+        expect(JSON.stringify(messages.data)).toContain("async world")
+
+        return {
+          promptStatus: prompt.status,
+          status: record(properties.status).type,
+          sessionMatched: properties.sessionID === sessionID,
+          persistedText: JSON.stringify(messages.data).includes("async world"),
+        }
+      }),
+    ),
+  )
+
+  serverPathParity("prompt returns persisted assistant error when reply setup fails", (serverPath) =>
+    withFakeLlm(serverPath, ({ sdk }) =>
+      Effect.gen(function* () {
+        const session = yield* capture(() => sdk.session.create({ title: "prompt setup failure" }))
+        const sessionID = String(record(session.data).id)
+        const prompt = yield* capture(() =>
+          sdk.session.prompt({
+            sessionID,
+            agent: "build",
+            model: { providerID: "test", modelID: "missing-model" },
+            parts: [{ type: "text", text: "hello llm" }],
+          }),
+        )
+        const messages = yield* capture(() => sdk.session.messages({ sessionID }))
+        const info = record(record(prompt.data).info)
+        const error = record(info.error)
+        const data = record(error.data)
+
+        expect(session.status).toBe(200)
+        expect(prompt.status).toBe(200)
+        expect(info.role).toBe("assistant")
+        expect(data.message).toContain("Model not found: test/missing-model")
+        expect(JSON.stringify(messages.data)).toContain("Model not found: test/missing-model")
+
+        return {
+          statuses: statuses({ session, prompt, messages }),
+          role: info.role,
+          error: data.message,
+          persistedError: JSON.stringify(messages.data).includes("Model not found: test/missing-model"),
+        }
+      }),
+    ),
+  )
+
   serverPathParity("matches generated SDK prompt streaming through fake LLM", (serverPath) =>
     withFakeLlm(serverPath, ({ sdk, llm }) =>
       Effect.gen(function* () {
